@@ -1,5 +1,5 @@
 #!/bin/bash
-source ./constants.sh
+source /usr/local/SPH2/constants.sh
 
 # 检查服务端状态
 check_server_status() {

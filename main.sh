@@ -1,8 +1,8 @@
 #!/bin/bash
-source ./constants.sh
-source ./install.sh
-source ./server_manager.sh
-source ./client_manager.sh
+source /usr/local/SPH2/constants.sh
+source /usr/local/SPH2/install.sh
+source /usr/local/SPH2/server_manager.sh
+source /usr/local/SPH2/client_manager.sh
 
 # 主菜单
 main_menu() {

@@ -1,5 +1,5 @@
 #!/bin/bash
-source ./constants.sh
+source /usr/local/SPH2/constants.sh
 
 # 检查客户端状态
 check_client_status() {
