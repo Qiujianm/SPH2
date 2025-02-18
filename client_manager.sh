@@ -14,6 +14,53 @@ check_client_status() {
     fi
 }
 
+# 生成客户端配置
+generate_client_config() {
+    echo -e "${YELLOW}正在生成客户端配置...${NC}"
+    
+    read -p "服务器地址: " SERVER_ADDR
+    read -p "服务器端口 (默认: 443): " SERVER_PORT
+    SERVER_PORT=${SERVER_PORT:-443}
+    read -p "本地HTTP代理端口 (默认: 8080): " LOCAL_PORT
+    LOCAL_PORT=${LOCAL_PORT:-8080}
+    read -p "认证密码 (默认: hysteria): " AUTH_STR
+    AUTH_STR=${AUTH_STR:-hysteria}
+    read -p "上行速度 Mbps (默认: 200): " UP_MBPS
+    UP_MBPS=${UP_MBPS:-200}
+    read -p "下行速度 Mbps (默认: 200): " DOWN_MBPS
+    DOWN_MBPS=${DOWN_MBPS:-200}
+    
+    mkdir -p "$CLIENT_CONFIG_DIR"
+    
+    cat > "$CLIENT_CONFIG_DIR/$LOCAL_PORT.json" <<EOF
+{
+    "server": "${SERVER_ADDR}:${SERVER_PORT}",
+    "protocol": "udp",
+    "up_mbps": ${UP_MBPS},
+    "down_mbps": ${DOWN_MBPS},
+    "auth_str": "${AUTH_STR}",
+    "server_name": "www.microsoft.com",
+    "insecure": true,
+    "retry": 3,
+    "retry_interval": 3,
+    "idle_timeout": 60,
+    "alpn": "h3",
+    "http": {
+        "listen": "0.0.0.0:${LOCAL_PORT}"
+    }
+}
+EOF
+
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}客户端配置生成成功！${NC}"
+        echo -e "HTTP代理: 0.0.0.0:${LOCAL_PORT}"
+        systemctl restart clients
+    else
+        echo -e "${RED}客户端配置生成失败！${NC}"
+    fi
+    sleep 0.5
+}
+
 # 列出配置文件
 list_configs() {
     local configs=("$CLIENT_CONFIG_DIR"/*.json)
