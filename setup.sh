@@ -45,6 +45,33 @@ download_file() {
     }
 }
 
+# 创建 h2 命令
+create_h2_command() {
+    cat > /usr/local/bin/h2 << 'EOFH2'
+#!/bin/bash
+SCRIPT_DIR="/usr/local/SPH2"
+
+# 错误处理
+set -e
+
+# 检查root权限
+if [ "$EUID" -ne 0 ]; then
+    echo -e "\033[0;31m请使用root用户运行此脚本\033[0m"
+    exit 1
+fi
+
+# 导入所有需要的模块
+source "${SCRIPT_DIR}/constants.sh"
+source "${SCRIPT_DIR}/server_manager.sh"
+source "${SCRIPT_DIR}/client_manager.sh"
+
+# 启动主程序
+bash "${SCRIPT_DIR}/main.sh"
+EOFH2
+
+    chmod +x /usr/local/bin/h2
+}
+
 # 主安装函数
 main_install() {
     # 清理旧安装
@@ -63,35 +90,18 @@ main_install() {
     # 设置权限
     chmod +x "${SCRIPT_DIR}"/*.sh
 
-    # 创建全局命令
-    cat > /usr/local/bin/h2 << 'EOF'
-#!/bin/bash
-SCRIPT_DIR="/usr/local/SPH2"
-
-# 错误处理
-set -e
-trap 'echo -e "\033[0;31m错误: 脚本执行失败\033[0m" >&2' ERR
-
-# 检查root权限
-if [ "$EUID" -ne 0 ]; then
-    echo -e "\033[0;31m请使用root用户运行此脚本\033[0m"
-    exit 1
-fi
-
-# 导入所有需要的模块
-source "$SCRIPT_DIR/constants.sh"
-source "$SCRIPT_DIR/server_manager.sh"
-source "$SCRIPT_DIR/client_manager.sh"
-
-# 启动主程序
-exec "$SCRIPT_DIR/main.sh"
-EOF
-
-    chmod +x /usr/local/bin/h2
+    # 创建 h2 命令
+    create_h2_command
 
     echo -e "${GREEN}安装完成！${NC}"
     echo -e "使用 ${YELLOW}h2${NC} 命令启动管理面板"
 }
+
+# 检查root权限
+if [ "$EUID" -ne 0 ]; then
+    echo -e "${RED}请使用root用户运行此脚本${NC}"
+    exit 1
+fi
 
 # 运行主安装函数
 main_install
