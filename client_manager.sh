@@ -38,11 +38,10 @@ EOF
 
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}客户端配置生成成功！${NC}"
-        return 0
     else
         echo -e "${RED}客户端配置生成失败！${NC}"
-        return 1
     fi
+    sleep 0.5
 }
 
 # 列出配置文件
@@ -51,13 +50,11 @@ list_configs() {
     local count=0
     echo -e "${GREEN}现有客户端配置：${NC}"
     
-    # 检查目录是否为空
     if [ ! -f "$CLIENT_CONFIG_DIR"/*.json ]; then
         echo -e "${YELLOW}没有找到任何配置文件${NC}"
         return 1
     fi
 
-    # 用数字列出所有配置文件
     for config in "${configs[@]}"; do
         if [ -f "$config" ]; then
             count=$((count + 1))
@@ -71,7 +68,6 @@ list_configs() {
 # 客户端管理菜单
 client_menu() {
     while true; do
-        clear
         echo -e "${GREEN}═══════ Hysteria 客户端管理 ═══════${NC}"
         echo "1. 启动客户端"
         echo "2. 停止客户端"
@@ -88,20 +84,25 @@ client_menu() {
             1)
                 systemctl start clients
                 echo -e "${GREEN}客户端已启动${NC}"
+                sleep 0.5
                 ;;
             2)
                 systemctl stop clients
                 echo -e "${YELLOW}客户端已停止${NC}"
+                sleep 0.5
                 ;;
             3)
                 systemctl restart clients
                 echo -e "${GREEN}客户端已重启${NC}"
+                sleep 0.5
                 ;;
             4)
                 systemctl status clients --no-pager
+                sleep 0.5
                 ;;
             5)
                 journalctl -u clients -n 50 --no-pager
+                sleep 0.5
                 ;;
             6)
                 generate_client_config
@@ -117,6 +118,7 @@ client_menu() {
                     else
                         echo -e "${RED}无效的配置编号${NC}"
                     fi
+                    sleep 0.5
                 fi
                 ;;
             8)
@@ -130,6 +132,7 @@ client_menu() {
                     else
                         echo -e "${RED}无效的配置编号${NC}"
                     fi
+                    sleep 0.5
                 fi
                 ;;
             0)
@@ -137,8 +140,8 @@ client_menu() {
                 ;;
             *)
                 echo -e "${RED}无效选择${NC}"
+                sleep 0.5
                 ;;
         esac
-        read -p "按回车键继续..."
     done
 }
