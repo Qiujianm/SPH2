@@ -11,6 +11,38 @@ check_server_status() {
     fi
 }
 
+generate_cert() {
+    echo -e "${YELLOW}生成自签名证书...${NC}"
+    mkdir -p /etc/hysteria
+    openssl req -x509 -nodes -newkey rsa:2048 -days 365 \
+        -keyout /etc/hysteria/server.key \
+        -out /etc/hysteria/server.crt \
+        -subj "/CN=hysteria.local"
+    
+    chmod 644 /etc/hysteria/server.crt
+    chmod 600 /etc/hysteria/server.key
+}
+
+create_systemd_service() {
+    cat > "$SERVICE_FILE" <<EOF
+[Unit]
+Description=Hysteria Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/hysteria server -c /etc/hysteria/config.yaml
+Restart=always
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+}
+
 auto_generate_config() {
     # 获取服务器IP
     SERVER_IP=$(curl -s -4 api64.ipify.org)
@@ -18,41 +50,42 @@ auto_generate_config() {
         SERVER_IP=$(curl -s ipv4.icanhazip.com)
     fi
     if [ -z "$SERVER_IP" ]; then
-        SERVER_IP=$(curl -s ip.sb)
-    fi
-    if [ -z "$SERVER_IP" ]; then
         echo -e "${RED}无法获取服务器IP地址${NC}"
         return 1
     fi
 
+    # 生成随机密码
+    AUTH_STR=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16)
+    
     read -p "请输入本地代理端口 (1-65535): " LOCAL_PORT
     
-    # 确保目录存在
-    mkdir -p "$HYSTERIA_ROOT"
-    mkdir -p "$CLIENT_CONFIG_DIR"
-
+    # 生成证书
+    generate_cert
+    
     # 生成服务端配置
     cat > "$HYSTERIA_CONFIG" <<EOF
 listen: :443
 
 auth:
   type: password
-  password: hysteria
+  password: ${AUTH_STR}
+
+tls:
+  cert: /etc/hysteria/server.crt
+  key: /etc/hysteria/server.key
 
 bandwidth:
   up: 200 mbps
   down: 200 mbps
 
-tls:
-  cert: /etc/hysteria/server.crt
-  key: /etc/hysteria/server.key
+ignoreClientBandwidth: true
 EOF
 
     # 生成客户端配置
-    cat > "$CLIENT_CONFIG_DIR/config_${LOCAL_PORT}.json" <<EOF
+    cat > "${CLIENT_CONFIG_DIR}/config_${LOCAL_PORT}.json" <<EOF
 {
     "server": "${SERVER_IP}:443",
-    "auth": "hysteria",
+    "auth": "${AUTH_STR}",
     "transport": {
         "type": "udp",
         "udp": {
@@ -60,6 +93,7 @@ EOF
         }
     },
     "tls": {
+        "sni": "${SERVER_IP}",
         "insecure": true,
         "alpn": ["h3"]
     },
@@ -73,43 +107,37 @@ EOF
         "up": "200 mbps",
         "down": "200 mbps"
     },
+    "socks5": {
+        "listen": "127.0.0.1:${LOCAL_PORT}"
+    },
     "http": {
         "listen": "127.0.0.1:${LOCAL_PORT}"
     }
 }
 EOF
 
+    # 创建systemd服务
+    create_systemd_service
+
     echo -e "${GREEN}配置文件已生成：${NC}"
     echo -e "服务端配置：${HYSTERIA_CONFIG}"
     echo -e "客户端配置：${CLIENT_CONFIG_DIR}/config_${LOCAL_PORT}.json"
+    echo -e "密码：${AUTH_STR}"
 }
 
 manual_generate_config() {
-    SERVER_IP=$(curl -s -4 api64.ipify.org)
-    if [ -z "$SERVER_IP" ]; then
-        SERVER_IP=$(curl -s ipv4.icanhazip.com)
-    fi
-    if [ -z "$SERVER_IP" ]; then
-        SERVER_IP=$(curl -s ip.sb)
-    fi
+    SERVER_IP=$(curl -s -4 api64.ipify.org || curl -s ipv4.icanhazip.com)
     
     read -p "请输入服务端口 [443]: " SERVER_PORT
     SERVER_PORT=${SERVER_PORT:-443}
     
-    read -p "请输入认证密码 [hysteria]: " AUTH_STR
-    AUTH_STR=${AUTH_STR:-hysteria}
+    read -p "请输入认证密码 [随机生成]: " AUTH_STR
+    AUTH_STR=${AUTH_STR:-$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16)}
     
     read -p "请输入本地代理端口 (1-65535): " LOCAL_PORT
     
-    read -p "请输入上行带宽(Mbps) [200]: " UP_MBPS
-    UP_MBPS=${UP_MBPS:-200}
+    generate_cert
     
-    read -p "请输入下行带宽(Mbps) [200]: " DOWN_MBPS
-    DOWN_MBPS=${DOWN_MBPS:-200}
-
-    mkdir -p "$HYSTERIA_ROOT"
-    mkdir -p "$CLIENT_CONFIG_DIR"
-
     # 生成服务端配置
     cat > "$HYSTERIA_CONFIG" <<EOF
 listen: :${SERVER_PORT}
@@ -118,17 +146,19 @@ auth:
   type: password
   password: ${AUTH_STR}
 
-bandwidth:
-  up: ${UP_MBPS} mbps
-  down: ${DOWN_MBPS} mbps
-
 tls:
   cert: /etc/hysteria/server.crt
   key: /etc/hysteria/server.key
+
+bandwidth:
+  up: 200 mbps
+  down: 200 mbps
+
+ignoreClientBandwidth: true
 EOF
 
     # 生成客户端配置
-    cat > "$CLIENT_CONFIG_DIR/config_${LOCAL_PORT}.json" <<EOF
+    cat > "${CLIENT_CONFIG_DIR}/config_${LOCAL_PORT}.json" <<EOF
 {
     "server": "${SERVER_IP}:${SERVER_PORT}",
     "auth": "${AUTH_STR}",
@@ -139,6 +169,7 @@ EOF
         }
     },
     "tls": {
+        "sni": "${SERVER_IP}",
         "insecure": true,
         "alpn": ["h3"]
     },
@@ -149,8 +180,11 @@ EOF
         "maxConnReceiveWindow": 53687090
     },
     "bandwidth": {
-        "up": "${UP_MBPS} mbps",
-        "down": "${DOWN_MBPS} mbps"
+        "up": "200 mbps",
+        "down": "200 mbps"
+    },
+    "socks5": {
+        "listen": "127.0.0.1:${LOCAL_PORT}"
     },
     "http": {
         "listen": "127.0.0.1:${LOCAL_PORT}"
@@ -158,9 +192,12 @@ EOF
 }
 EOF
 
+    create_systemd_service
+
     echo -e "${GREEN}配置文件已生成：${NC}"
     echo -e "服务端配置：${HYSTERIA_CONFIG}"
     echo -e "客户端配置：${CLIENT_CONFIG_DIR}/config_${LOCAL_PORT}.json"
+    echo -e "密码：${AUTH_STR}"
 }
 
 server_menu() {

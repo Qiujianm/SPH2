@@ -11,4 +11,28 @@ HYSTERIA_ROOT="/etc/hysteria"
 HYSTERIA_CONFIG="${HYSTERIA_ROOT}/config.yaml"
 CLIENT_CONFIG_DIR="/root/H2"
 SERVICE_FILE="/etc/systemd/system/hysteria-server.service"
-CLIENT_SERVICE_FILE="/etc/systemd/system/clients.service"
+
+# 默认配置参数
+DEFAULT_TRANSPORT='{
+    "type": "udp",
+    "udp": {
+        "hopInterval": "30s"
+    }
+}'
+
+DEFAULT_TLS='{
+    "insecure": true,
+    "alpn": ["h3"]
+}'
+
+DEFAULT_QUIC='{
+    "initStreamReceiveWindow": 26843545,
+    "maxStreamReceiveWindow": 26843545,
+    "initConnReceiveWindow": 53687090,
+    "maxConnReceiveWindow": 53687090
+}'
+
+DEFAULT_BANDWIDTH='{
+    "up": "200 mbps",
+    "down": "200 mbps"
+}'
