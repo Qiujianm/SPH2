@@ -18,10 +18,10 @@ auto_generate_config() {
 
     # 获取服务器IP
     SERVER_IP=$(curl -s ipv4.icanhazip.com)
-    if [ -z "$SERVER_IP" ]; then
+    if [ -z "$SERVER_IP" ];then
         SERVER_IP=$(curl -s ipinfo.io/ip)
     fi
-    if [ -z "$SERVER_IP" ]; then
+    if [ -z "$SERVER_IP" ];then
         echo -e "${RED}无法获取服务器IP地址${NC}"
         return 1
     fi
