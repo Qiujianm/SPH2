@@ -89,7 +89,7 @@ EOF
     "down_mbps": ${DOWN_MBPS},
     "auth": "${PASSWORD}",
     "http": {
-        "listen": "127.0.0.1:${HTTP_PORT}"
+        "listen": "0.0.0.0:${HTTP_PORT}"
     }
 }
 EOF
