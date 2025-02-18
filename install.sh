@@ -117,7 +117,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/hysteria -c $HYSTERIA_CONFIG
+ExecStart=/usr/local/bin/hysteria -c ${HYSTERIA_CONFIG}
 Restart=on-failure
 
 [Install]
