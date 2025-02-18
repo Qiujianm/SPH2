@@ -180,7 +180,6 @@ install_mode() {
 # 主菜单
 main_menu() {
     while true; do
-        clear
         echo -e "${GREEN}════════ Hysteria 管理脚本 ════════${NC}"
         echo "1. 安装模式"
         echo "2. 服务端管理"
@@ -195,24 +194,31 @@ main_menu() {
         case $choice in
             1)
                 install_mode
+                sleep 0.5
                 ;;
             2)
                 server_menu
+                sleep 0.5
                 ;;
             3)
                 client_menu
+                sleep 0.5
                 ;;
             4)
                 optimize_system
+                sleep 0.5
                 ;;
             5)
                 check_update
+                sleep 0.5
                 ;;
             6)
                 check_running_status
+                sleep 0.5
                 ;;
             7)
                 uninstall
+                sleep 0.5
                 ;;
             0)
                 echo -e "${GREEN}感谢使用！${NC}"
@@ -220,12 +226,12 @@ main_menu() {
                 ;;
             *)
                 echo -e "${RED}无效选择${NC}"
+                sleep 0.5
                 ;;
         esac
-        read -p "按回车键继续..."
     done
 }
 
-# 程序入口
+# 检查系统环境
 check_system
 main_menu
