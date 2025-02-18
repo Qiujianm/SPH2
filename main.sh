@@ -1,7 +1,11 @@
 #!/bin/bash
-source /usr/local/SPH2/constants.sh
 
-# 检查运行状态
+# 导入其他脚本
+source /usr/local/SPH2/constants.sh
+source /usr/local/SPH2/server_manager.sh
+source /usr/local/SPH2/client_manager.sh
+
+# 运行状态检查
 check_running_status() {
     clear
     echo -e "${GREEN}═══════ 运行状态 ═══════${NC}"
@@ -75,7 +79,7 @@ check_update() {
         echo "当前版本: $current_version"
         
         # 更新Hysteria
-        curl -fsSL https://get.hy2.dev/ | bash
+        bash /usr/local/SPH2/setup.sh
         
         new_version=$(hysteria version | head -n1)
         if [ "$current_version" != "$new_version" ]; then
@@ -119,6 +123,11 @@ uninstall() {
     exit 0
 }
 
+# 安装模式
+install_mode() {
+    bash /usr/local/SPH2/setup.sh
+}
+
 # 主菜单
 main_menu() {
     while true; do
@@ -140,7 +149,7 @@ main_menu() {
         read -p "请选择 [0-7]: " choice
         case $choice in
             1)
-                bash /usr/local/SPH2/setup.sh
+                install_mode
                 ;;
             2)
                 server_menu
@@ -181,6 +190,9 @@ if [ "$EUID" -ne 0 ]; then
     echo -e "${RED}请使用root用户运行此脚本${NC}"
     exit 1
 fi
+
+# 确保必要的目录存在
+mkdir -p "$SCRIPT_DIR"
 
 # 运行主菜单
 main_menu
