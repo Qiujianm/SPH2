@@ -9,6 +9,31 @@ NC='\033[0m'
 # 基础目录
 SCRIPT_DIR="/usr/local/SPH2"
 
+# 清理旧的安装
+cleanup_old_installation() {
+    echo -e "${YELLOW}清理旧的安装...${NC}"
+    
+    # 停止所有相关服务和进程
+    systemctl stop hysteria-server 2>/dev/null || true
+    systemctl stop clients 2>/dev/null || true
+    systemctl disable hysteria-server 2>/dev/null || true
+    systemctl disable clients 2>/dev/null || true
+    pkill -f hysteria || true
+    
+    # 删除旧文件和目录
+    rm -rf /etc/hysteria
+    rm -rf /root/H2
+    rm -rf /usr/local/SPH2
+    rm -f /etc/systemd/system/hysteria-server.service
+    rm -f /etc/systemd/system/clients.service
+    rm -f /usr/local/bin/h2
+    
+    # 重载systemd
+    systemctl daemon-reload
+    
+    echo -e "${GREEN}清理完成${NC}"
+}
+
 # 下载文件
 download_file() {
     local file=$1
@@ -20,35 +45,12 @@ download_file() {
     }
 }
 
-# 安装基本依赖
-install_dependencies() {
-    echo -e "${YELLOW}正在安装基本依赖...${NC}"
-    if [ -f /etc/redhat-release ]; then
-        yum install -y wget curl systemd
-    elif [ -f /etc/debian_version ]; then
-        apt-get update && apt-get install -y wget curl systemd
-    fi
-}
-
-# 停止所有相关进程
-stop_all_processes() {
-    echo -e "${YELLOW}停止所有相关进程...${NC}"
-    systemctl stop hysteria-server 2>/dev/null || true
-    systemctl stop clients 2>/dev/null || true
-    pkill -f /usr/local/bin/hysteria || true
-    sleep 2
-}
-
 # 主安装函数
 main_install() {
-    # 停止所有进程
-    stop_all_processes
+    # 清理旧安装
+    cleanup_old_installation
     
-    # 安装依赖
-    install_dependencies
-    
-    # 创建并清理目录
-    rm -rf "$SCRIPT_DIR"
+    # 创建目录
     mkdir -p "$SCRIPT_DIR"
 
     # 下载脚本文件
@@ -62,14 +64,6 @@ main_install() {
     chmod +x "${SCRIPT_DIR}"/*.sh
 
     # 创建全局命令
-    create_global_command
-
-    echo -e "${GREEN}安装完成！${NC}"
-    echo -e "使用 ${YELLOW}h2${NC} 命令启动管理面板"
-}
-
-# 创建全局命令
-create_global_command() {
     cat > /usr/local/bin/h2 << 'EOF'
 #!/bin/bash
 SCRIPT_DIR="/usr/local/SPH2"
@@ -94,6 +88,9 @@ exec "$SCRIPT_DIR/main.sh"
 EOF
 
     chmod +x /usr/local/bin/h2
+
+    echo -e "${GREEN}安装完成！${NC}"
+    echo -e "使用 ${YELLOW}h2${NC} 命令启动管理面板"
 }
 
 # 运行主安装函数

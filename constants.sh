@@ -10,5 +10,5 @@ NC='\033[0m'
 HYSTERIA_ROOT="/etc/hysteria"
 HYSTERIA_CONFIG="${HYSTERIA_ROOT}/config.yaml"
 CLIENT_CONFIG_DIR="/root/H2"
-SERVICE_FILE="/etc/systemd/system/hysteria.service"
+SERVICE_FILE="/etc/systemd/system/hysteria-server.service"
 CLIENT_SERVICE_FILE="/etc/systemd/system/clients.service"
