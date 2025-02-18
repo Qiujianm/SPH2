@@ -13,14 +13,17 @@ check_server_status() {
 
 auto_generate_config() {
     # 获取服务器IP
-    SERVER_IP=$(curl -s -4 api64.ipify.org || curl -s ipv4.icanhazip.com)
+    SERVER_IP=$(curl -s -4 api64.ipify.org)
     if [ -z "$SERVER_IP" ]; then
-        SERVER_IP=$(curl -s ip.sb || curl -s ipinfo.io/ip)
+        SERVER_IP=$(curl -s ipv4.icanhazip.com)
+    fi
+    if [ -z "$SERVER_IP" ]; then
+        SERVER_IP=$(curl -s ip.sb)
     fi
     if [ -z "$SERVER_IP" ]; then
         echo -e "${RED}无法获取服务器IP地址${NC}"
         return 1
-    }
+    fi
 
     read -p "请输入本地代理端口 (1-65535): " LOCAL_PORT
     
@@ -82,7 +85,13 @@ EOF
 }
 
 manual_generate_config() {
-    SERVER_IP=$(curl -s -4 api64.ipify.org || curl -s ipv4.icanhazip.com)
+    SERVER_IP=$(curl -s -4 api64.ipify.org)
+    if [ -z "$SERVER_IP" ]; then
+        SERVER_IP=$(curl -s ipv4.icanhazip.com)
+    fi
+    if [ -z "$SERVER_IP" ]; then
+        SERVER_IP=$(curl -s ip.sb)
+    fi
     
     read -p "请输入服务端口 [443]: " SERVER_PORT
     SERVER_PORT=${SERVER_PORT:-443}
