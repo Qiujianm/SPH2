@@ -9,6 +9,19 @@ NC='\033[0m'
 # 基础目录
 SCRIPT_DIR="/usr/local/SPH2"
 
+# 创建全局命令的主脚本
+create_main_command() {
+    cat > /usr/local/bin/h2 <<EOF
+#!/bin/bash
+source ${SCRIPT_DIR}/constants.sh
+source ${SCRIPT_DIR}/server_manager.sh
+source ${SCRIPT_DIR}/client_manager.sh
+$(cat ${SCRIPT_DIR}/main.sh)
+EOF
+
+    chmod +x /usr/local/bin/h2
+}
+
 # 检查root权限
 if [ "$EUID" -ne 0 ]; then
     echo -e "${RED}请使用root用户运行此脚本${NC}"
@@ -38,7 +51,6 @@ download_file() {
     }
 }
 
-# 开始安装
 echo -e "${YELLOW}正在安装基本依赖...${NC}"
 check_command "wget"
 check_command "curl"
@@ -47,7 +59,7 @@ check_command "curl"
 rm -rf "$SCRIPT_DIR"
 mkdir -p "$SCRIPT_DIR"
 
-# 下载所有脚本文件
+# 下载所有脚本
 echo -e "${YELLOW}正在下载脚本文件...${NC}"
 FILES=("main.sh" "constants.sh" "server_manager.sh" "client_manager.sh" "start_clients.sh")
 for file in "${FILES[@]}"; do
@@ -57,13 +69,13 @@ done
 # 设置权限
 chmod +x "${SCRIPT_DIR}"/*.sh
 
-# 创建全局命令快捷方式
-ln -sf "${SCRIPT_DIR}/main.sh" /usr/local/bin/h2
+# 创建全局命令
+create_main_command
 
 echo -e "${GREEN}安装完成！${NC}"
 echo -e "使用 ${YELLOW}h2${NC} 命令启动管理脚本"
 
-# 运行主脚本
+# 直接运行命令
 h2
 
 exit 0
