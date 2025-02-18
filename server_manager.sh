@@ -12,7 +12,7 @@ check_server_status() {
     fi
 }
 
-# 全自动生成配置
+# 自动生成配置
 auto_generate_config() {
     echo -e "${YELLOW}正在生成服务端配置...${NC}"
 
@@ -24,7 +24,7 @@ auto_generate_config() {
     if [ -z "$SERVER_IP" ]; then
         echo -e "${RED}无法获取服务器IP地址${NC}"
         return 1
-    }
+    fi
 
     # 只需要用户输入HTTP端口
     read -p "请输入HTTP端口: " HTTP_PORT

@@ -1,14 +1,12 @@
 #!/bin/bash
-source /etc/hysteria/constants.sh
+source ./constants.sh
 
-# 停止所有已存在的客户端进程
-pkill -f "hysteria client"
+# 启动所有客户端配置
+start_all_clients() {
+    for config in "$CLIENT_CONFIG_DIR"/*.json; do
+        echo -e "${YELLOW}正在启动 $config...${NC}"
+        hysteria -c "$config" &
+    done
+}
 
-# 遍历所有配置文件并启动
-for config in "$CLIENT_CONFIG_DIR"/*.json; do
-    if [ -f "$config" ]; then
-        /usr/local/bin/hysteria client -c "$config" &
-    fi
-done
-
-wait
+start_all_clients
