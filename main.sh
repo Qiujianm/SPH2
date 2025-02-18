@@ -1,7 +1,4 @@
 #!/bin/bash
-source ./constants.sh
-source ./server_manager.sh
-source ./client_manager.sh
 
 # 错误处理
 set -e
@@ -64,10 +61,6 @@ install_mode() {
     mkdir -p "$HYSTERIA_ROOT"
     mkdir -p "$CLIENT_CONFIG_DIR"
     
-    # 创建启动脚本
-    cp start_clients.sh "$START_CLIENTS_SCRIPT"
-    chmod +x "$START_CLIENTS_SCRIPT"
-    
     # 创建服务端服务文件
     cat > "$SERVICE_FILE" <<EOF
 [Unit]
@@ -92,7 +85,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/bin/bash ${START_CLIENTS_SCRIPT}
+ExecStart=/bin/bash ${SCRIPT_DIR}/start_clients.sh
 Restart=always
 RestartSec=3
 
@@ -183,5 +176,6 @@ main_menu() {
     done
 }
 
+# 主程序入口
 check_system
 main_menu
