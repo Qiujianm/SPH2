@@ -5,6 +5,8 @@ source ./constants.sh
 check_client_status() {
     if systemctl is-active --quiet clients; then
         echo -e "${GREEN}客户端正在运行${NC}"
+        num_clients=$(pgrep -f "hysteria client" | wc -l)
+        echo -e "${GREEN}当前运行的客户端数量: $num_clients${NC}"
         return 0
     else
         echo -e "${YELLOW}客户端未运行${NC}"
@@ -38,6 +40,7 @@ EOF
 
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}客户端配置生成成功！${NC}"
+        systemctl restart clients
     else
         echo -e "${RED}客户端配置生成失败！${NC}"
     fi
@@ -98,6 +101,7 @@ client_menu() {
                 ;;
             4)
                 systemctl status clients --no-pager
+                ps aux | grep "hysteria client" | grep -v grep
                 sleep 0.5
                 ;;
             5)
