@@ -12,6 +12,19 @@ check_client_status() {
     fi
 }
 
+# 删除客户端配置
+delete_client_config() {
+    echo -e "${YELLOW}当前客户端配置文件：${NC}"
+    ls "$CLIENT_CONFIG_DIR"/*.json
+    read -p "请输入要删除的客户端配置文件名（不包括路径）: " config_file
+    if [ -f "$CLIENT_CONFIG_DIR/$config_file" ]; then
+        rm -f "$CLIENT_CONFIG_DIR/$config_file"
+        echo -e "${GREEN}客户端配置文件 ${config_file} 已删除${NC}"
+    else
+        echo -e "${RED}客户端配置文件 ${config_file} 不存在${NC}"
+    fi
+}
+
 # 客户端管理菜单
 client_menu() {
     while true; do
@@ -21,7 +34,7 @@ client_menu() {
         echo "3. 重启客户端"
         echo "4. 查看客户端状态"
         echo "5. 查看客户端日志"
-        echo "6. 添加客户端配置"
+        echo "6. 删除客户端配置"
         echo "0. 返回主菜单"
         
         read -p "请选择 [0-6]: " choice
@@ -50,7 +63,7 @@ client_menu() {
                 sleep 0.5
                 ;;
             6)
-                add_client_config
+                delete_client_config
                 ;;
             0)
                 return
