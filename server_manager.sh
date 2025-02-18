@@ -12,54 +12,42 @@ check_server_status() {
     fi
 }
 
-# 服务端配置生成
+# 生成服务端配置
 generate_server_config() {
     echo -e "${YELLOW}正在生成服务器配置...${NC}"
     
-    # 获取必要参数
     read -p "监听端口 (默认: 443): " PORT
     PORT=${PORT:-443}
     
-    read -p "上行带宽 (默认: 200 mbps): " UP_BANDWIDTH
-    UP_BANDWIDTH=${UP_BANDWIDTH:-200}
-    UP_BANDWIDTH="${UP_BANDWIDTH} mbps"
+    mkdir -p "$HYSTERIA_ROOT"
     
-    read -p "下行带宽 (默认: 200 mbps): " DOWN_BANDWIDTH
-    DOWN_BANDWIDTH=${DOWN_BANDWIDTH:-200}
-    DOWN_BANDWIDTH="${DOWN_BANDWIDTH} mbps"
-    
-    # 生成配置文件
     cat > "$HYSTERIA_CONFIG" <<EOF
-listen: :$PORT
-protocol: udp
-auth:
-  type: password
-  password: $(tr -dc A-Za-z0-9 </dev/urandom | head -c 16)
-bandwidth:
-  up: $UP_BANDWIDTH
-  down: $DOWN_BANDWIDTH
+{
+    "listen": ":$PORT",
+    "protocol": "udp",
+    "up_mbps": 200,
+    "down_mbps": 200
+}
 EOF
 
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}服务器配置生成成功！${NC}"
-        return 0
     else
         echo -e "${RED}服务器配置生成失败！${NC}"
-        return 1
     fi
+    sleep 0.5
 }
 
 # 服务端管理菜单
 server_menu() {
     while true; do
-        clear
         echo -e "${GREEN}═══════ Hysteria 服务端管理 ═══════${NC}"
         echo "1. 启动服务端"
         echo "2. 停止服务端"
         echo "3. 重启服务端"
         echo "4. 查看服务端状态"
         echo "5. 查看服务端日志"
-        echo "6. 重新生成服务端配置"
+        echo "6. 重新生成配置"
         echo "7. 查看当前配置"
         echo "0. 返回主菜单"
         
@@ -68,24 +56,30 @@ server_menu() {
             1)
                 systemctl start hysteria
                 echo -e "${GREEN}服务端已启动${NC}"
+                sleep 0.5
                 ;;
             2)
                 systemctl stop hysteria
                 echo -e "${YELLOW}服务端已停止${NC}"
+                sleep 0.5
                 ;;
             3)
                 systemctl restart hysteria
                 echo -e "${GREEN}服务端已重启${NC}"
+                sleep 0.5
                 ;;
             4)
                 systemctl status hysteria --no-pager
+                sleep 0.5
                 ;;
             5)
-                tail -n 50 "$LOG_FILE"
+                journalctl -u hysteria -n 50 --no-pager
+                sleep 0.5
                 ;;
             6)
                 generate_server_config
                 systemctl restart hysteria
+                sleep 0.5
                 ;;
             7)
                 if [ -f "$HYSTERIA_CONFIG" ]; then
@@ -93,14 +87,15 @@ server_menu() {
                 else
                     echo -e "${RED}配置文件不存在${NC}"
                 fi
+                sleep 0.5
                 ;;
             0)
                 return
                 ;;
             *)
                 echo -e "${RED}无效选择${NC}"
+                sleep 0.5
                 ;;
         esac
-        read -p "按回车键继续..."
     done
 }
