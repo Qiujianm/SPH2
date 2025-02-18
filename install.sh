@@ -42,6 +42,9 @@ done
 # 设置权限
 chmod +x "${SCRIPT_DIR}"/*.sh
 
+# 停止所有可能使用 hysteria 文件的进程
+pkill -f /usr/local/bin/hysteria || true
+
 # 创建全局命令
 cat > /usr/local/bin/h2 << 'EOF'
 #!/bin/bash
@@ -105,11 +108,26 @@ install_mode() {
     mkdir -p /usr/local/bin
     wget -O /usr/local/bin/hysteria https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64
     chmod +x /usr/local/bin/hysteria
+
+    # 创建服务文件
+    cat > /etc/systemd/system/hysteria-server.service <<EOF
+[Unit]
+Description=Hysteria Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/hysteria -c $HYSTERIA_CONFIG
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
     mkdir -p "$HYSTERIA_ROOT"
     mkdir -p "$CLIENT_CONFIG_DIR"
     systemctl daemon-reload
-    systemctl enable hysteria
-    systemctl enable clients
+    systemctl enable hysteria-server
     optimize_system
     echo -e "\033[0;32mHysteria 安装完成！\033[0m"
     sleep 0.5

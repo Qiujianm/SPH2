@@ -21,7 +21,7 @@ main_menu() {
         read -p "请选择 [0-7]: " choice
         case $choice in
             1)
-                install_hysteria
+                install_mode
                 ;;
             2)
                 server_menu
