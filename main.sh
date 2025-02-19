@@ -1,9 +1,10 @@
 #!/bin/bash
 
 # 导入其他脚本
-source /usr/local/SPH2/constants.sh
-source /usr/local/SPH2/server_manager.sh
-source /usr/local/SPH2/client_manager.sh
+cd /root
+source "./constants.sh"
+source "./server_manager.sh"
+source "./client_manager.sh"
 
 # 运行状态检查
 check_running_status() {
