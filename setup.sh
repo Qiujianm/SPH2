@@ -238,8 +238,8 @@ EOF
         "maxConnReceiveWindow": 53687090
     },
     "bandwidth": {
-        "up": "70 mbps",
-        "down": "70 mbps"
+        "up": "60 mbps",
+        "down": "60 mbps"
     },
     "http": {
         "listen": "0.0.0.0:$http_port"
