@@ -60,36 +60,23 @@ update() {
     # 备份当前配置
     cp /etc/hysteria/config.yaml /etc/hysteria/config.yaml.bak 2>/dev/null
     
-    # 尝试多个下载源
-    local urls=(
-        "https://mirror.ghproxy.com/https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64"
-        "https://gh.ddlc.top/https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64"
-        "https://hub.gitmirror.com/https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64"
-    )
+    # 根据地理位置选择下载源
+    if curl -s http://ipinfo.io | grep -q '"country": "CN"'; then
+        local url="https://hub.gitmirror.com/https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64"
+    else
+        local url="https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64"
+    fi
     
-    local success=false
-    for url in "${urls[@]}"; do
-        printf "%b尝试从 %s 下载...%b\n" "${YELLOW}" "$url" "${NC}"
-        if wget -O /usr/local/bin/hysteria.new "$url" && 
-           chmod +x /usr/local/bin/hysteria.new &&
-           /usr/local/bin/hysteria.new version >/dev/null 2>&1; then
-            mv /usr/local/bin/hysteria.new /usr/local/bin/hysteria
-            printf "%b更新成功%b\n" "${GREEN}" "${NC}"
-            success=true
-            break
-        fi
-        rm -f /usr/local/bin/hysteria.new
-    done
-    
-    if ! $success; then
-        if curl -fsSL https://get.hy2.dev/ | bash; then
-            printf "%b更新成功%b\n" "${GREEN}" "${NC}"
-        else
-            printf "%b更新失败%b\n" "${RED}" "${NC}"
-            [ -f /etc/hysteria/config.yaml.bak ] && \
-                mv /etc/hysteria/config.yaml.bak /etc/hysteria/config.yaml
-            return 1
-        fi
+    printf "%b尝试从 %s 下载...%b\n" "${YELLOW}" "$url" "${NC}"
+    if wget -O /usr/local/bin/hysteria.new "$url" && 
+       chmod +x /usr/local/bin/hysteria.new &&
+       /usr/local/bin/hysteria.new version >/dev/null 2>&1; then
+        mv /usr/local/bin/hysteria.new /usr/local/bin/hysteria
+        printf "%b更新成功%b\n" "${GREEN}" "${NC}"
+    else
+        printf "%b更新失败%b\n" "${RED}" "${NC}"
+        [ -f /etc/hysteria/config.yaml.bak ] && mv /etc/hysteria/config.yaml.bak /etc/hysteria/config.yaml
+        return 1
     fi
     
     systemctl restart hysteria-server
