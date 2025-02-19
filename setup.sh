@@ -83,59 +83,68 @@ done
 MAINEOF
     chmod +x /root/main.sh
 
-    # 创建并赋权 server.sh
+# 创建并赋权 server.sh
     cat > /root/server.sh << 'SERVEREOF'
 #!/bin/bash
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 NC='\033[0m'
 
-# 服务端安装
-install() {
-    clear
-    auto_generate_config
-}
+# 配置文件路径
+HYSTERIA_CONFIG="/etc/hysteria/config.yaml"
 
-# 自动生成配置
-auto_generate_config() {
-    echo -e "${GREEN}正在生成服务端配置...${NC}"
-    
-    domain=$(curl -s ipv4.domains.google.com || curl -s ifconfig.me)
-    port=443
-    password=$(openssl rand -base64 16)
-    
-    generate_server_config "$domain" "$port" "$password"
-}
-
-# 手动生成配置
-manual_generate_config() {
-    read -p "请输入域名/IP: " domain
-    read -p "请输入端口(默认443): " port
-    port=${port:-443}
-    read -p "请输入密码(留空自动生成): " password
-    password=${password:-$(openssl rand -base64 16)}
-    
-    generate_server_config "$domain" "$port" "$password"
-}
-
-# 生成服务器配置
+# 生成服务端配置
 generate_server_config() {
-    local domain=$1
-    local port=$2
-    local password=$3
-    local socks_port=1080
-    
+    local mode=$1  # auto 或 manual
+    local domain port password socks_port
+
+    if [ "$mode" = "auto" ]; then
+        # 自动模式
+        domain=$(curl -s ipv4.domains.google.com || curl -s ifconfig.me)
+        port=443
+        password=$(openssl rand -base64 16)
+        read -p "请输入SOCKS5端口 [1080]: " socks_port
+        socks_port=${socks_port:-1080}
+        
+        # 检查端口是否被占用
+        if netstat -tuln | grep -q ":$socks_port "; then
+            echo -e "${RED}警告: 端口 $socks_port 已被占用${NC}"
+            return 1
+        fi
+    else
+        # 手动模式
+        read -p "请输入域名 (留空使用服务器IP): " domain
+        domain=${domain:-$(curl -s ipv4.domains.google.com || curl -s ifconfig.me)}
+        
+        read -p "请输入服务端口 [443]: " port
+        port=${port:-443}
+        
+        read -p "请输入验证密码 [随机生成]: " password
+        password=${password:-$(openssl rand -base64 16)}
+        
+        read -p "请输入SOCKS5端口 [1080]: " socks_port
+        socks_port=${socks_port:-1080}
+        
+        # 检查端口是否被占用
+        if netstat -tuln | grep -q ":$socks_port "; then
+            echo -e "${RED}警告: 端口 $socks_port 已被占用${NC}"
+            return 1
+        fi
+    fi
+
+    # 创建必要的目录
     mkdir -p /etc/hysteria
     mkdir -p /root/H2
-    
+
     # 生成证书
     openssl req -x509 -newkey rsa:4096 -nodes -sha256 -days 365 \
         -keyout /etc/hysteria/server.key -out /etc/hysteria/server.crt \
         -subj "/CN=$domain" 2>/dev/null
-    
+
     # 生成服务端配置
-    cat > /etc/hysteria/config.yaml << EOF
+    cat > ${HYSTERIA_CONFIG} << EOF
 listen: :$port
 
 tls:
@@ -149,16 +158,17 @@ auth:
 quic:
   initStreamReceiveWindow: 26843545
   maxStreamReceiveWindow: 26843545
-  initConnReceiveWindow: 53687090
-  maxConnReceiveWindow: 53687090
+  initConnReceiveWindow: 67108864
+  maxConnReceiveWindow: 67108864
 
 bandwidth:
   up: 200 mbps
   down: 200 mbps
 EOF
-    
+
     # 生成客户端配置
-    cat > "/root/H2/client_${port}.json" << EOF
+    local client_config="/root/H2/client_${port}_${socks_port}.json"
+    cat > "$client_config" << EOF
 {
     "server": "$domain:$port",
     "auth": "$password",
@@ -176,8 +186,8 @@ EOF
     "quic": {
         "initStreamReceiveWindow": 26843545,
         "maxStreamReceiveWindow": 26843545,
-        "initConnReceiveWindow": 53687090,
-        "maxConnReceiveWindow": 53687090
+        "initConnReceiveWindow": 67108864,
+        "maxConnReceiveWindow": 67108864
     },
     "bandwidth": {
         "up": "200 mbps",
@@ -188,8 +198,8 @@ EOF
     }
 }
 EOF
-    
-    # 创建服务
+
+    # 生成systemd服务文件
     cat > /etc/systemd/system/hysteria-server.service << EOF
 [Unit]
 Description=Hysteria Server
@@ -205,20 +215,17 @@ WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
-    systemctl enable hysteria-server
-    systemctl start hysteria-server
     
-    echo -e "${GREEN}配置生成完成！${NC}"
-    echo -e "服务端配置：/etc/hysteria/config.yaml"
-    echo -e "客户端配置：/root/H2/client_${port}.json"
+    echo -e "${GREEN}配置生成完成：${NC}"
+    echo -e "服务端配置：${HYSTERIA_CONFIG}"
+    echo -e "客户端配置：${client_config}"
     echo -e "服务端口：${port}"
     echo -e "SOCKS5端口：${socks_port}"
     echo -e "验证密码：${password}"
-    sleep 3
 }
 
 # 服务端管理菜单
-manage() {
+server_menu() {
     while true; do
         clear
         echo -e "${GREEN}═══════ Hysteria 服务端管理 ═══════${NC}"
@@ -229,24 +236,24 @@ manage() {
         echo "6. 全自动生成配置"
         echo "7. 手动生成配置"
         echo "0. 返回主菜单"
-        echo -e "${GREEN}=========================${NC}"
+        echo -e "${GREEN}====================================${NC}"
         
-        read -p "请选择 [0-7]: " choice
-        case $choice in
+        read -p "请选择 [0-7]: " option
+        case $option in
             1)
                 systemctl start hysteria-server
                 echo -e "${GREEN}服务端已启动${NC}"
-                sleep 2
+                sleep 1
                 ;;
             2)
                 systemctl stop hysteria-server
                 echo -e "${YELLOW}服务端已停止${NC}"
-                sleep 2
+                sleep 1
                 ;;
             3)
                 systemctl restart hysteria-server
                 echo -e "${GREEN}服务端已重启${NC}"
-                sleep 2
+                sleep 1
                 ;;
             4)
                 clear
@@ -254,28 +261,31 @@ manage() {
                 read -n 1 -s -r -p "按任意键继续..."
                 ;;
             6)
-                auto_generate_config
+                generate_server_config "auto"
+                read -n 1 -s -r -p "按任意键继续..."
                 ;;
             7)
-                manual_generate_config
+                generate_server_config "manual"
+                read -n 1 -s -r -p "按任意键继续..."
                 ;;
             0)
                 return
                 ;;
             *)
                 echo -e "${RED}无效选择${NC}"
-                sleep 2
+                sleep 1
                 ;;
         esac
     done
 }
 
+# 根据参数执行对应功能
 case "$1" in
     "install")
-        install
+        generate_server_config "auto"
         ;;
     "manage")
-        manage
+        server_menu
         ;;
     *)
         echo "用法: $0 {install|manage}"
@@ -391,23 +401,48 @@ NC='\033[0m'
 optimize() {
     echo -e "${YELLOW}正在优化系统配置...${NC}"
     
+    # 创建sysctl配置文件
     cat > /etc/sysctl.d/99-hysteria.conf << EOF
-net.core.rmem_max=4194304
-net.core.wmem_max=4194304
-net.core.rmem_default=4194304
-net.core.wmem_default=4194304
-net.ipv4.tcp_rmem=4096 87380 4194304
-net.ipv4.tcp_wmem=4096 87380 4194304
+# 设置16MB缓冲区
+net.core.rmem_max=16777216
+net.core.wmem_max=16777216
+net.core.rmem_default=16777216
+net.core.wmem_default=16777216
+# TCP缓冲区设置
+net.ipv4.tcp_rmem=4096 87380 16777216
+net.ipv4.tcp_wmem=4096 87380 16777216
+# 启用Brutal拥塞控制
+net.core.default_qdisc=fq
+net.ipv4.tcp_congestion_control=brutal
+# 其他网络优化
+net.ipv4.tcp_fastopen=3
+net.ipv4.tcp_slow_start_after_idle=0
+# Hysteria QUIC优化
+net.ipv4.ip_forward=1
+net.ipv4.tcp_mtu_probing=1
 EOF
     
+    # 立即应用sysctl设置
     sysctl -p /etc/sysctl.d/99-hysteria.conf
     
+    # 设置系统文件描述符限制
     cat > /etc/security/limits.d/99-hysteria.conf << EOF
-* soft nofile 65535
-* hard nofile 65535
+* soft nofile 1000000
+* hard nofile 1000000
+root soft nofile 1000000
+root hard nofile 1000000
 EOF
 
-    echo -e "${GREEN}系统优化完成${NC}"
+    # 立即设置当前会话的缓冲区
+    sysctl -w net.core.rmem_max=16777216
+    sysctl -w net.core.wmem_max=16777216
+
+    echo -e "${GREEN}系统优化完成，已设置：${NC}"
+    echo -e "1. 发送/接收缓冲区: 16MB"
+    echo -e "2. 文件描述符限制: 1000000"
+    echo -e "3. Brutal拥塞控制"
+    echo -e "4. TCP Fast Open"
+    echo -e "5. QUIC优化"
     sleep 2
 }
 
