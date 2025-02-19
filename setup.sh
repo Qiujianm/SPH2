@@ -209,8 +209,8 @@ quic:
   maxConnReceiveWindow: 53687090
 
 bandwidth:
-  up: 200 mbps
-  down: 200 mbps
+  up: 190 mbps
+  down: 190 mbps
 EOF
     
     printf "%b生成客户端配置...%b\n" "${YELLOW}" "${NC}"
@@ -238,8 +238,8 @@ EOF
         "maxConnReceiveWindow": 53687090
     },
     "bandwidth": {
-        "up": "200 mbps",
-        "down": "200 mbps"
+        "up": "190 mbps",
+        "down": "190 mbps"
     },
     "socks5": {
         "listen": "0.0.0.0:$socks_port"
