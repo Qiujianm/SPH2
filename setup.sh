@@ -32,10 +32,10 @@ create_all_scripts() {
     print_status "info" "创建所有模块脚本...\n"
     
     # 创建目录
-    mkdir -p /root/H2 /etc/hysteria
+    mkdir -p /root/hysteria
 
     # 创建并赋权 main.sh
-    cat > /root/main.sh << 'MAINEOF'
+cat > /root/hysteria/main.sh << 'MAINEOF'
 #!/bin/bash
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -88,7 +88,7 @@ MAINEOF
     chmod +x /root/main.sh
 
     # 创建并赋权 server.sh
-    cat > /root/server.sh << 'SERVEREOF'
+cat > /root/hysteria/server.sh << 'SERVEREOF'
 #!/bin/bash
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -174,7 +174,6 @@ fi
     printf "%b创建配置目录...%b\n" "${YELLOW}" "${NC}"
     # 创建必要的目录
     mkdir -p /etc/hysteria
-    mkdir -p /root/H2
     
     printf "%b生成SSL证书...%b\n" "${YELLOW}" "${NC}"
     # 生成证书
@@ -216,7 +215,7 @@ EOF
     
     printf "%b生成客户端配置...%b\n" "${YELLOW}" "${NC}"
     # 生成客户端配置
-    local client_config="/root/H2/${domain}_${port}_${socks_port}.json"
+    local client_config="/root/${domain}_${port}_${socks_port}.json"
     cat > "$client_config" << EOF
 {
     "server": "$domain:$port",
@@ -404,7 +403,7 @@ SERVEREOF
     chmod +x /root/server.sh
 
     # 创建并赋权 client.sh
-    cat > /root/client.sh << 'CLIENTEOF'
+cat > /root/hysteria/client.sh << 'CLIENTEOF'
 #!/bin/bash
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -416,7 +415,7 @@ check_client_status() {
     printf "\n%b正在进行客户端检查...%b\n" "${YELLOW}" "${NC}"
     
     # 检查配置文件
-    local config_file=$(ls /root/H2/client_*.json 2>/dev/null | head -1)
+    local config_file=$(ls /root/*.json 2>/dev/null | head -1)
     if [ ! -f "$config_file" ]; then
                 printf "%b错误: 未找到配置文件%b\n" "${RED}" "${NC}"
         return 1
@@ -429,8 +428,8 @@ check_client_status() {
     fi
     
     # 检查运行状态
-    if [ -f "/root/H2/hysteria-client.pid" ]; then
-        local pid=$(cat /root/H2/hysteria-client.pid)
+    if [ -f "/root/hysteria-client.pid" ]; then
+        local pid=$(cat /root/hysteria-client.pid)
         if ps -p $pid >/dev/null 2>&1; then
             printf "%b客户端进程运行中 (PID: $pid)%b\n" "${GREEN}" "${NC}"
             
@@ -442,21 +441,9 @@ check_client_status() {
             else
                 printf "%bSOCKS5端口($socks_port)未正常监听%b\n" "${RED}" "${NC}"
             fi
-            
-            # 显示连接状态
-            printf "\n%b当前连接状态:%b\n" "${YELLOW}" "${NC}"
-            netstat -anp | grep hysteria
-            
-            # 测试SOCKS5连接
-            printf "\n%b测试SOCKS5连接:%b\n" "${YELLOW}" "${NC}"
-            if curl -x socks5h://127.0.0.1:$socks_port -sL --connect-timeout 5 http://ip-api.com/json/; then
-                printf "\n%bSOCKS5连接测试成功%b\n" "${GREEN}" "${NC}"
-            else
-                printf "\n%bSOCKS5连接测试失败%b\n" "${RED}" "${NC}"
-            fi
         else
             printf "%b客户端进程已终止 (PID文件存在但进程不存在)%b\n" "${RED}" "${NC}"
-            rm -f /root/H2/hysteria-client.pid
+            rm -f /root/hysteria-client.pid
         fi
     else
         printf "%b客户端未运行%b\n" "${YELLOW}" "${NC}"
@@ -486,16 +473,16 @@ while true; do
 
     case $choice in
         1)
-            if [ -f "/root/H2/hysteria-client.pid" ]; then
+            if [ -f "/root/hysteria-client.pid" ]; then
                 printf "%b客户端已在运行%b\n" "${YELLOW}" "${NC}"
             else
-                config_file=$(ls /root/H2/client_*.json | head -1)
+                config_file=$(ls /root/*.json | head -1)
                 if [ -n "$config_file" ]; then
                     printf "%b使用配置文件: %s%b\n" "${GREEN}" "$config_file" "${NC}"
                     /usr/local/bin/hysteria client -c "$config_file" \
                         --log-level info \
                         > /var/log/hysteria-client.log 2>&1 &
-                    echo $! > /root/H2/hysteria-client.pid
+                    echo $! > /root/hysteria-client.pid
                     sleep 2
                     check_client_status
                 else
@@ -505,9 +492,9 @@ while true; do
             read -t 30 -n 1 -s -r -p "按任意键继续..."
             ;;
         2)
-            if [ -f "/root/H2/hysteria-client.pid" ]; then
-                kill $(cat /root/H2/hysteria-client.pid) 2>/dev/null
-                rm -f /root/H2/hysteria-client.pid
+            if [ -f "/root/hysteria-client.pid" ]; then
+                kill $(cat /root/hysteria-client.pid) 2>/dev/null
+                rm -f /root/hysteria-client.pid
                 printf "%b客户端已停止%b\n" "${YELLOW}" "${NC}"
                 if [ -f "/var/log/hysteria-client.log" ]; then
                     printf "\n%b最后的日志记录:%b\n" "${YELLOW}" "${NC}"
@@ -519,17 +506,17 @@ while true; do
             read -t 30 -n 1 -s -r -p "按任意键继续..."
             ;;
         3)
-            if [ -f "/root/H2/hysteria-client.pid" ]; then
-                kill $(cat /root/H2/hysteria-client.pid) 2>/dev/null
-                rm -f /root/H2/hysteria-client.pid
+            if [ -f "/root/hysteria-client.pid" ]; then
+                kill $(cat /root/hysteria-client.pid) 2>/dev/null
+                rm -f /root/hysteria-client.pid
             fi
-            config_file=$(ls /root/H2/client_*.json | head -1)
+            config_file=$(ls /root/*.json | head -1)
             if [ -n "$config_file" ]; then
                 printf "%b使用配置文件: %s%b\n" "${GREEN}" "$config_file" "${NC}"
                 /usr/local/bin/hysteria client -c "$config_file" \
                     --log-level info \
                     > /var/log/hysteria-client.log 2>&1 &
-                echo $! > /root/H2/hysteria-client.pid
+                echo $! > /root/hysteria-client.pid
                 sleep 2
                 check_client_status
             else
@@ -546,11 +533,11 @@ while true; do
             ;;
         5)
             printf "\n%b可用的客户端配置文件：%b\n" "${YELLOW}" "${NC}"
-            ls -l /root/H2/client_*.json 2>/dev/null || echo "无配置文件"
+            ls -l /root/*.json 2>/dev/null || echo "无配置文件"
             echo
             read -t 60 -p "请输入要删除的配置文件名称: " filename
-            if [ -f "/root/H2/$filename" ]; then
-                rm -f "/root/H2/$filename"
+            if [ -f "/root/$filename" ]; then
+                rm -f "/root/$filename"
                 printf "%b配置文件已删除%b\n" "${GREEN}" "${NC}"
             else
                 printf "%b文件不存在%b\n" "${RED}" "${NC}"
@@ -570,7 +557,7 @@ CLIENTEOF
     chmod +x /root/client.sh
 
     # 创建并赋权 config.sh
-    cat > /root/config.sh << 'CONFIGEOF'
+cat > /root/hysteria/config.sh << 'CONFIGEOF'
 #!/bin/bash
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -717,11 +704,11 @@ CONFIGEOF
     # 创建启动器命令
     cat > /usr/local/bin/h2 << 'CMDEOF'
 #!/bin/bash
-cd /root
+cd /root/hysteria
 [ "$EUID" -ne 0 ] && printf "\033[0;31m请使用root权限运行此脚本\033[0m\n" && exit 1
 bash ./main.sh
 CMDEOF
-    chmod +x /usr/local/bin/h2
+chmod +x /usr/local/bin/h2
 
     printf "%b所有模块脚本创建完成%b\n" "${GREEN}" "${NC}"
 }
