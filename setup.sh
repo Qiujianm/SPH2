@@ -209,8 +209,8 @@ quic:
   maxConnReceiveWindow: 53687090
 
 bandwidth:
-  up: 100 mbps
-  down: 100 mbps
+  up: 200 mbps
+  down: 200 mbps
 EOF
     
     printf "%b生成客户端配置...%b\n" "${YELLOW}" "${NC}"
@@ -238,8 +238,8 @@ EOF
         "maxConnReceiveWindow": 53687090
     },
     "bandwidth": {
-        "up": "100 mbps",
-        "down": "100 mbps"
+        "up": "70 mbps",
+        "down": "70 mbps"
     },
     "http": {
         "listen": "0.0.0.0:$http_port"
