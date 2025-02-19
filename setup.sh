@@ -1,10 +1,7 @@
 #!/bin/bash
 
-# 脚本信息
 VERSION="2025-02-19"
 AUTHOR="Qiujianm"
-
-# 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
@@ -13,9 +10,26 @@ NC='\033[0m'
 # 检查root权限
 [ "$EUID" -ne 0 ] && echo -e "${RED}请使用root权限运行此脚本${NC}" && exit 1
 
+# 打印状态函数
+print_status() {
+    local type=$1
+    local message=$2
+    case "$type" in
+        "info")
+            printf "%b[信息]%b %s" "${GREEN}" "${NC}" "$message"
+            ;;
+        "warn")
+            printf "%b[警告]%b %s" "${YELLOW}" "${NC}" "$message"
+            ;;
+        "error")
+            printf "%b[错误]%b %s" "${RED}" "${NC}" "$message"
+            ;;
+    esac
+}
+
 # 创建并赋权所有模块脚本
 create_all_scripts() {
-    echo -e "${YELLOW}创建所有模块脚本...${NC}"
+    print_status "info" "创建所有模块脚本...\n"
     
     # 创建目录
     mkdir -p /root/H2 /etc/hysteria
@@ -33,10 +47,10 @@ AUTHOR="Qiujianm"
 
 while true; do
     clear
-    echo -e "${GREEN}════════ Hysteria 管理脚本 ════════${NC}"
-    echo -e "${GREEN}作者: ${AUTHOR}${NC}"
-    echo -e "${GREEN}版本: ${VERSION}${NC}"
-    echo -e "${GREEN}====================================${NC}"
+    printf "%b════════ Hysteria 管理脚本 ════════%b\n" "${GREEN}" "${NC}"
+    printf "%b作者: ${AUTHOR}%b\n" "${GREEN}" "${NC}"
+    printf "%b版本: ${VERSION}%b\n" "${GREEN}" "${NC}"
+    printf "%b====================================%b\n" "${GREEN}" "${NC}"
     echo "1. 安装模式"
     echo "2. 服务端管理"
     echo "3. 客户端管理"
@@ -45,48 +59,37 @@ while true; do
     echo "6. 运行状态"
     echo "7. 完全卸载"
     echo "0. 退出脚本"
-    echo -e "${GREEN}====================================${NC}"
+    printf "%b====================================%b\n" "${GREEN}" "${NC}"
     
-    read -p "请选择 [0-7]: " choice
+    read -t 60 -p "请选择 [0-7]: " choice || {
+        printf "\n%b操作超时，退出脚本%b\n" "${YELLOW}" "${NC}"
+        exit 1
+    }
+    
     case $choice in
-        1)
-            bash ./server.sh install
-            ;;
-        2)
-            bash ./server.sh manage
-            ;;
-        3)
-            bash ./client.sh
-            ;;
-        4)
-            bash ./config.sh optimize
-            ;;
-        5)
-            bash ./config.sh update
-            ;;
+        1) bash ./server.sh install ;;
+        2) bash ./server.sh manage ;;
+        3) bash ./client.sh ;;
+        4) bash ./config.sh optimize ;;
+        5) bash ./config.sh update ;;
         6)
             systemctl status hysteria-server
-            read -n 1 -s -r -p "按任意键继续..."
+            read -t 30 -n 1 -s -r -p "按任意键继续..."
             ;;
-        7)
-            bash ./config.sh uninstall
-            ;;
-        0)
-            exit 0
-            ;;
+        7) bash ./config.sh uninstall ;;
+        0) exit 0 ;;
         *)
-            echo -e "${RED}无效选择${NC}"
-            sleep 2
+            printf "%b无效选择%b\n" "${RED}" "${NC}"
+            sleep 1
             ;;
     esac
 done
 MAINEOF
     chmod +x /root/main.sh
 
-# 创建并赋权 server.sh
+    # 创建并赋权 server.sh
     cat > /root/server.sh << 'SERVEREOF'
 #!/bin/bash
-
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
@@ -95,54 +98,94 @@ NC='\033[0m'
 # 配置文件路径
 HYSTERIA_CONFIG="/etc/hysteria/config.yaml"
 
-# 生成服务端配置
-generate_server_config() {
-    local mode=$1  # auto 或 manual
-    local domain port password socks_port
-
-    if [ "$mode" = "auto" ]; then
-        # 自动模式
-        domain=$(curl -s ipv4.domains.google.com || curl -s ifconfig.me)
-        port=443
-        password=$(openssl rand -base64 16)
-        read -p "请输入SOCKS5端口 [1080]: " socks_port
-        socks_port=${socks_port:-1080}
-        
-        # 检查端口是否被占用
-        if netstat -tuln | grep -q ":$socks_port "; then
-            echo -e "${RED}警告: 端口 $socks_port 已被占用${NC}"
-            return 1
-        fi
-    else
-        # 手动模式
-        read -p "请输入域名 (留空使用服务器IP): " domain
-        domain=${domain:-$(curl -s ipv4.domains.google.com || curl -s ifconfig.me)}
-        
-        read -p "请输入服务端口 [443]: " port
-        port=${port:-443}
-        
-        read -p "请输入验证密码 [随机生成]: " password
-        password=${password:-$(openssl rand -base64 16)}
-        
-        read -p "请输入SOCKS5端口 [1080]: " socks_port
-        socks_port=${socks_port:-1080}
-        
-        # 检查端口是否被占用
-        if netstat -tuln | grep -q ":$socks_port "; then
-            echo -e "${RED}警告: 端口 $socks_port 已被占用${NC}"
-            return 1
-        fi
+# 端口检查函数
+check_port() {
+    local port=$1
+    if netstat -tuln | grep -qE ":${port}\b"; then
+        printf "%b端口 $port 已被占用%b\n" "${RED}" "${NC}"
+        return 1
     fi
+    return 0
+}
 
+# 服务检查函数
+check_service() {
+    printf "%b正在检查服务状态...%b\n" "${YELLOW}" "${NC}"
+    
+    # 检查配置文件
+    if [ ! -f "$HYSTERIA_CONFIG" ]; then
+        printf "%b错误: 配置文件不存在%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    # 检查证书文件
+    if [ ! -f "/etc/hysteria/server.crt" ] || [ ! -f "/etc/hysteria/server.key" ]; then
+        printf "%b错误: 证书文件不存在%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    # 检查程序
+    if [ ! -f "/usr/local/bin/hysteria" ]; then
+        printf "%b错误: Hysteria程序不存在%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    return 0
+}
+
+# 生成服务端配置
+# 在 server.sh 中修改 generate_server_config 函数
+generate_server_config() {
+    printf "%b开始生成配置...%b\n" "${YELLOW}" "${NC}"
+    
+    # 获取 SOCKS5 端口
+    local socks_port
+    while true; do
+        read -p "请输入SOCKS5端口 [1080]: " socks_port
+        socks_port=${socks_port:-1080}
+        
+        # 检查端口合法性
+        if ! [[ "$socks_port" =~ ^[0-9]+$ ]] || [ "$socks_port" -lt 1 ] || [ "$socks_port" -gt 65535 ]; then
+            printf "%b错误: 请输入有效的端口号 (1-65535)%b\n" "${RED}" "${NC}"
+            continue
+        fi
+        
+        # 检查端口占用
+        if netstat -tuln | grep -q ":$socks_port "; then
+            printf "%b端口 %s 已被占用，请选择其他端口%b\n" "${RED}" "$socks_port" "${NC}"
+            continue
+        fi
+        break
+    done
+    
+    # 获取IP地址
+    printf "%b正在获取服务器IP...%b\n" "${YELLOW}" "${NC}"
+# 使用国内可以稳定访问的IP查询服务
+local domain=$(curl -s ipinfo.io/ip || curl -s myip.ipip.net | grep -oE "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" || curl -s https://api.ip.sb/ip)
+if [ -z "$domain" ]; then
+    printf "%b警告: 无法自动获取公网IP，请手动输入%b\n" "${YELLOW}" "${NC}"
+    read -p "请输入服务器公网IP: " domain
+fi
+
+    # 设置其他参数
+    local port=443
+    local password=$(openssl rand -base64 16)
+    
+    printf "%b创建配置目录...%b\n" "${YELLOW}" "${NC}"
     # 创建必要的目录
     mkdir -p /etc/hysteria
     mkdir -p /root/H2
-
+    
+    printf "%b生成SSL证书...%b\n" "${YELLOW}" "${NC}"
     # 生成证书
-    openssl req -x509 -newkey rsa:4096 -nodes -sha256 -days 365 \
+    if ! openssl req -x509 -newkey rsa:4096 -nodes -sha256 -days 365 \
         -keyout /etc/hysteria/server.key -out /etc/hysteria/server.crt \
-        -subj "/CN=$domain" 2>/dev/null
-
+        -subj "/CN=$domain" 2>/dev/null; then
+        printf "%b证书生成失败%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    printf "%b生成服务端配置...%b\n" "${YELLOW}" "${NC}"
     # 生成服务端配置
     cat > ${HYSTERIA_CONFIG} << EOF
 listen: :$port
@@ -155,19 +198,25 @@ auth:
   type: password
   password: $password
 
+masquerade:
+  proxy:
+    url: https://www.bing.com
+    rewriteHost: true
+
 quic:
   initStreamReceiveWindow: 26843545
   maxStreamReceiveWindow: 26843545
-  initConnReceiveWindow: 67108864
-  maxConnReceiveWindow: 67108864
+  initConnReceiveWindow: 53687090
+  maxConnReceiveWindow: 53687090
 
 bandwidth:
   up: 200 mbps
   down: 200 mbps
 EOF
-
+    
+    printf "%b生成客户端配置...%b\n" "${YELLOW}" "${NC}"
     # 生成客户端配置
-    local client_config="/root/H2/client_${port}_${socks_port}.json"
+    local client_config="/root/H2/${domain}_${port}_${socks_port}.json"
     cat > "$client_config" << EOF
 {
     "server": "$domain:$port",
@@ -186,8 +235,8 @@ EOF
     "quic": {
         "initStreamReceiveWindow": 26843545,
         "maxStreamReceiveWindow": 26843545,
-        "initConnReceiveWindow": 67108864,
-        "maxConnReceiveWindow": 67108864
+        "initConnReceiveWindow": 53687090,
+        "maxConnReceiveWindow": 53687090
     },
     "bandwidth": {
         "up": "200 mbps",
@@ -199,36 +248,106 @@ EOF
 }
 EOF
 
-    # 生成systemd服务文件
-    cat > /etc/systemd/system/hysteria-server.service << EOF
-[Unit]
-Description=Hysteria Server
-After=network.target
-
-[Service]
-ExecStart=/usr/local/bin/hysteria server -c /etc/hysteria/config.yaml
-Restart=on-failure
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    systemctl daemon-reload
+    printf "%b配置生成完成：%b\n" "${GREEN}" "${NC}"
+    echo "服务端配置：${HYSTERIA_CONFIG}"
+    echo "客户端配置：${client_config}"
+    echo "服务器IP：${domain}"
+    echo "服务端口：${port}"
+    echo "SOCKS5端口：${socks_port}"
+    echo "验证密码：${password}"
     
-    echo -e "${GREEN}配置生成完成：${NC}"
-    echo -e "服务端配置：${HYSTERIA_CONFIG}"
-    echo -e "客户端配置：${client_config}"
-    echo -e "服务端口：${port}"
-    echo -e "SOCKS5端口：${socks_port}"
-    echo -e "验证密码：${password}"
+    return 0
+}
+
+# 服务控制函数
+service_control() {
+    local action=$1
+    local max_wait=5
+    
+    # 辅助函数：检查具体错误
+    check_error() {
+        printf "\n%b正在进行故障诊断...%b\n" "${YELLOW}" "${NC}"
+        
+        # 检查配置文件
+        printf "\n%b检查配置文件内容:%b\n" "${YELLOW}" "${NC}"
+        cat "$HYSTERIA_CONFIG"
+        
+        # 检查端口占用
+        printf "\n%b检查端口占用:%b\n" "${YELLOW}" "${NC}"
+        local port=$(grep -Po 'listen: :\K\d+' "$HYSTERIA_CONFIG")
+        if netstat -tuln | grep -q ":$port "; then
+            printf "%b端口 $port 已被占用%b\n" "${RED}" "${NC}"
+            netstat -tuln | grep ":$port "
+        fi
+        
+        # 检查证书文件
+        printf "\n%b检查证书文件:%b\n" "${YELLOW}" "${NC}"
+        if ! [ -r "/etc/hysteria/server.crt" ] || ! [ -r "/etc/hysteria/server.key" ]; then
+            printf "%b证书文件不存在或无法读取%b\n" "${RED}" "${NC}"
+            ls -l /etc/hysteria/server.{crt,key}
+        fi
+        
+        # 检查日志
+        printf "\n%b最近的错误日志:%b\n" "${YELLOW}" "${NC}"
+        journalctl -u hysteria-server --no-pager -n 20
+    }
+    
+    case "$action" in
+        "start")
+            printf "%b正在启动服务...%b" "${GREEN}" "${NC}"
+            systemctl start hysteria-server &
+            for ((i=1; i<=max_wait; i++)); do
+                if systemctl is-active hysteria-server >/dev/null 2>&1; then
+                    printf "\r%b[成功]%b 服务启动成功\n" "${GREEN}" "${NC}"
+                    return 0
+                fi
+                printf "."
+                sleep 1
+            done
+            printf "\r%b[失败]%b 服务启动失败\n" "${RED}" "${NC}"
+            check_error
+            ;;
+        "stop")
+            printf "%b正在停止服务...%b" "${GREEN}" "${NC}"
+            systemctl stop hysteria-server &
+            for ((i=1; i<=max_wait; i++)); do
+                if ! systemctl is-active hysteria-server >/dev/null 2>&1; then
+                    printf "\r%b[完成]%b 服务已停止\n" "${YELLOW}" "${NC}"
+                    return 0
+                fi
+                printf "."
+                sleep 1
+            done
+            printf "\r%b[失败]%b 服务停止失败\n" "${RED}" "${NC}"
+            ;;
+        "restart")
+            printf "%b正在重启服务...%b" "${GREEN}" "${NC}"
+            systemctl restart hysteria-server &
+            for ((i=1; i<=max_wait; i++)); do
+                if systemctl is-active hysteria-server >/dev/null 2>&1; then
+                    printf "\r%b[成功]%b 服务重启成功\n" "${GREEN}" "${NC}"
+                    return 0
+                fi
+                printf "."
+                sleep 1
+            done
+            printf "\r%b[失败]%b 服务重启失败\n" "${RED}" "${NC}"
+            check_error
+            ;;
+        "status")
+            if ! timeout 2 systemctl status hysteria-server; then
+                printf "\n%b[错误]%b 服务状态异常\n" "${RED}" "${NC}"
+                check_error
+            fi
+            ;;
+    esac
 }
 
 # 服务端管理菜单
 server_menu() {
     while true; do
         clear
-        echo -e "${GREEN}═══════ Hysteria 服务端管理 ═══════${NC}"
+        printf "%b═══════ Hysteria 服务端管理 ═══════%b\n" "${GREEN}" "${NC}"
         echo "1. 启动服务端"
         echo "2. 停止服务端"
         echo "3. 重启服务端"
@@ -236,53 +355,42 @@ server_menu() {
         echo "6. 全自动生成配置"
         echo "7. 手动生成配置"
         echo "0. 返回主菜单"
-        echo -e "${GREEN}====================================${NC}"
+        printf "%b====================================%b\n" "${GREEN}" "${NC}"
         
-        read -p "请选择 [0-7]: " option
+        read -t 60 -p "请选择 [0-7]: " option || {
+            printf "\n%b操作超时，返回主菜单%b\n" "${YELLOW}" "${NC}"
+            return
+        }
+
         case $option in
-            1)
-                systemctl start hysteria-server
-                echo -e "${GREEN}服务端已启动${NC}"
-                sleep 1
+            1|2|3|4)
+                case $option in
+                    1) service_control "start";;
+                    2) service_control "stop";;
+                    3) service_control "restart";;
+                    4) service_control "status";;
+                esac
+                read -t 30 -n 1 -s -r -p "按任意键继续..."
                 ;;
-            2)
-                systemctl stop hysteria-server
-                echo -e "${YELLOW}服务端已停止${NC}"
-                sleep 1
-                ;;
-            3)
-                systemctl restart hysteria-server
-                echo -e "${GREEN}服务端已重启${NC}"
-                sleep 1
-                ;;
-            4)
-                clear
-                systemctl status hysteria-server
-                read -n 1 -s -r -p "按任意键继续..."
-                ;;
-            6)
-                generate_server_config "auto"
-                read -n 1 -s -r -p "按任意键继续..."
-                ;;
-            7)
-                generate_server_config "manual"
-                read -n 1 -s -r -p "按任意键继续..."
+            6|7)
+                generate_server_config
+                service_control "restart"
+                read -t 30 -n 1 -s -r -p "按任意键继续..."
                 ;;
             0)
                 return
                 ;;
             *)
-                echo -e "${RED}无效选择${NC}"
+                printf "%b无效选择%b\n" "${RED}" "${NC}"
                 sleep 1
                 ;;
         esac
     done
 }
 
-# 根据参数执行对应功能
 case "$1" in
     "install")
-        generate_server_config "auto"
+        generate_server_config
         ;;
     "manage")
         server_menu
@@ -303,86 +411,158 @@ GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 NC='\033[0m'
 
+# 客户端状态检查函数
+check_client_status() {
+    printf "\n%b正在进行客户端检查...%b\n" "${YELLOW}" "${NC}"
+    
+    # 检查配置文件
+    local config_file=$(ls /root/H2/client_*.json 2>/dev/null | head -1)
+    if [ ! -f "$config_file" ]; then
+                printf "%b错误: 未找到配置文件%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    # 检查程序是否存在
+    if [ ! -f "/usr/local/bin/hysteria" ]; then
+        printf "%b错误: Hysteria程序不存在%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    # 检查运行状态
+    if [ -f "/root/H2/hysteria-client.pid" ]; then
+        local pid=$(cat /root/H2/hysteria-client.pid)
+        if ps -p $pid >/dev/null 2>&1; then
+            printf "%b客户端进程运行中 (PID: $pid)%b\n" "${GREEN}" "${NC}"
+            
+            # 检查SOCKS5端口
+            local socks_port=$(grep -oP '"listen": "0.0.0.0:\K\d+' "$config_file")
+            if netstat -tuln | grep -q ":$socks_port "; then
+                printf "%bSOCKS5端口($socks_port)正常监听%b\n" "${GREEN}" "${NC}"
+                netstat -tuln | grep ":$socks_port "
+            else
+                printf "%bSOCKS5端口($socks_port)未正常监听%b\n" "${RED}" "${NC}"
+            fi
+            
+            # 显示连接状态
+            printf "\n%b当前连接状态:%b\n" "${YELLOW}" "${NC}"
+            netstat -anp | grep hysteria
+            
+            # 测试SOCKS5连接
+            printf "\n%b测试SOCKS5连接:%b\n" "${YELLOW}" "${NC}"
+            if curl -x socks5h://127.0.0.1:$socks_port -sL --connect-timeout 5 http://ip-api.com/json/; then
+                printf "\n%bSOCKS5连接测试成功%b\n" "${GREEN}" "${NC}"
+            else
+                printf "\n%bSOCKS5连接测试失败%b\n" "${RED}" "${NC}"
+            fi
+        else
+            printf "%b客户端进程已终止 (PID文件存在但进程不存在)%b\n" "${RED}" "${NC}"
+            rm -f /root/H2/hysteria-client.pid
+        fi
+    else
+        printf "%b客户端未运行%b\n" "${YELLOW}" "${NC}"
+        # 显示上次运行日志
+        if [ -f "/var/log/hysteria-client.log" ]; then
+            printf "\n%b上次运行日志:%b\n" "${YELLOW}" "${NC}"
+            tail -n 10 /var/log/hysteria-client.log
+        fi
+    fi
+}
+
 while true; do
     clear
-    echo -e "${GREEN}═══════ Hysteria 客户端管理 ═══════${NC}"
+    printf "%b═══════ Hysteria 客户端管理 ═══════%b\n" "${GREEN}" "${NC}"
     echo "1. 启动客户端"
     echo "2. 停止客户端"
     echo "3. 重启客户端"
     echo "4. 查看客户端状态"
     echo "5. 删除客户端配置"
     echo "0. 返回主菜单"
-    echo -e "${GREEN}=========================${NC}"
+    printf "%b====================================%b\n" "${GREEN}" "${NC}"
     
-    read -p "请选择 [0-5]: " choice
+    read -t 60 -p "请选择 [0-5]: " choice || {
+        printf "\n%b操作超时，返回主菜单%b\n" "${YELLOW}" "${NC}"
+        exit 0
+    }
+
     case $choice in
         1)
             if [ -f "/root/H2/hysteria-client.pid" ]; then
-                echo -e "${YELLOW}客户端已在运行${NC}"
+                printf "%b客户端已在运行%b\n" "${YELLOW}" "${NC}"
             else
                 config_file=$(ls /root/H2/client_*.json | head -1)
                 if [ -n "$config_file" ]; then
-                    /usr/local/bin/hysteria client -c "$config_file" &
+                    printf "%b使用配置文件: %s%b\n" "${GREEN}" "$config_file" "${NC}"
+                    /usr/local/bin/hysteria client -c "$config_file" \
+                        --log-level info \
+                        > /var/log/hysteria-client.log 2>&1 &
                     echo $! > /root/H2/hysteria-client.pid
-                    echo -e "${GREEN}客户端已启动${NC}"
+                    sleep 2
+                    check_client_status
                 else
-                    echo -e "${RED}未找到客户端配置文件${NC}"
+                    printf "%b未找到客户端配置文件%b\n" "${RED}" "${NC}"
                 fi
             fi
-            sleep 2
+            read -t 30 -n 1 -s -r -p "按任意键继续..."
             ;;
         2)
             if [ -f "/root/H2/hysteria-client.pid" ]; then
-                kill $(cat /root/H2/hysteria-client.pid)
+                kill $(cat /root/H2/hysteria-client.pid) 2>/dev/null
                 rm -f /root/H2/hysteria-client.pid
-                echo -e "${YELLOW}客户端已停止${NC}"
+                printf "%b客户端已停止%b\n" "${YELLOW}" "${NC}"
+                if [ -f "/var/log/hysteria-client.log" ]; then
+                    printf "\n%b最后的日志记录:%b\n" "${YELLOW}" "${NC}"
+                    tail -n 5 /var/log/hysteria-client.log
+                fi
             else
-                echo -e "${RED}客户端未运行${NC}"
+                printf "%b客户端未运行%b\n" "${RED}" "${NC}"
             fi
-            sleep 2
+            read -t 30 -n 1 -s -r -p "按任意键继续..."
             ;;
         3)
             if [ -f "/root/H2/hysteria-client.pid" ]; then
-                kill $(cat /root/H2/hysteria-client.pid)
+                kill $(cat /root/H2/hysteria-client.pid) 2>/dev/null
                 rm -f /root/H2/hysteria-client.pid
             fi
             config_file=$(ls /root/H2/client_*.json | head -1)
             if [ -n "$config_file" ]; then
-                /usr/local/bin/hysteria client -c "$config_file" &
+                printf "%b使用配置文件: %s%b\n" "${GREEN}" "$config_file" "${NC}"
+                /usr/local/bin/hysteria client -c "$config_file" \
+                    --log-level info \
+                    > /var/log/hysteria-client.log 2>&1 &
                 echo $! > /root/H2/hysteria-client.pid
-                echo -e "${GREEN}客户端已重启${NC}"
+                sleep 2
+                check_client_status
             else
-                echo -e "${RED}未找到客户端配置文件${NC}"
+                printf "%b未找到客户端配置文件%b\n" "${RED}" "${NC}"
             fi
-            sleep 2
+            read -t 30 -n 1 -s -r -p "按任意键继续..."
             ;;
         4)
-            if [ -f "/root/H2/hysteria-client.pid" ]; then
-                echo -e "${GREEN}客户端正在运行${NC}"
-                ps -p $(cat /root/H2/hysteria-client.pid)
-            else
-                echo -e "${RED}客户端未运行${NC}"
-            fi
-            read -n 1 -s -r -p "按任意键继续..."
+            clear
+            printf "%b═══════ 客户端状态检查 ═══════%b\n" "${GREEN}" "${NC}"
+            check_client_status
+            printf "%b═══════════════════════════%b\n" "${GREEN}" "${NC}"
+            read -t 30 -n 1 -s -r -p "按任意键继续..."
             ;;
         5)
-            echo "可用的客户端配置文件："
-            ls -1 /root/H2/client_*.json 2>/dev/null
-            read -p "请输入要删除的配置文件名称: " filename
+            printf "\n%b可用的客户端配置文件：%b\n" "${YELLOW}" "${NC}"
+            ls -l /root/H2/client_*.json 2>/dev/null || echo "无配置文件"
+            echo
+            read -t 60 -p "请输入要删除的配置文件名称: " filename
             if [ -f "/root/H2/$filename" ]; then
                 rm -f "/root/H2/$filename"
-                echo -e "${GREEN}配置文件已删除${NC}"
+                printf "%b配置文件已删除%b\n" "${GREEN}" "${NC}"
             else
-                echo -e "${RED}文件不存在${NC}"
+                printf "%b文件不存在%b\n" "${RED}" "${NC}"
             fi
-            sleep 2
+            read -t 30 -n 1 -s -r -p "按任意键继续..."
             ;;
         0)
             exit 0
             ;;
         *)
-            echo -e "${RED}无效选择${NC}"
-            sleep 2
+            printf "%b无效选择%b\n" "${RED}" "${NC}"
+            sleep 1
             ;;
     esac
 done
@@ -399,7 +579,7 @@ NC='\033[0m'
 
 # 系统优化
 optimize() {
-    echo -e "${YELLOW}正在优化系统配置...${NC}"
+    printf "%b正在优化系统配置...%b\n" "${YELLOW}" "${NC}"
     
     # 创建sysctl配置文件
     cat > /etc/sysctl.d/99-hysteria.conf << EOF
@@ -437,54 +617,82 @@ EOF
     sysctl -w net.core.rmem_max=16777216
     sysctl -w net.core.wmem_max=16777216
 
-    echo -e "${GREEN}系统优化完成，已设置：${NC}"
-    echo -e "1. 发送/接收缓冲区: 16MB"
-    echo -e "2. 文件描述符限制: 1000000"
-    echo -e "3. Brutal拥塞控制"
-    echo -e "4. TCP Fast Open"
-    echo -e "5. QUIC优化"
+    printf "%b系统优化完成，已设置：%b\n" "${GREEN}" "${NC}"
+    echo "1. 发送/接收缓冲区: 16MB"
+    echo "2. 文件描述符限制: 1000000"
+    echo "3. Brutal拥塞控制"
+    echo "4. TCP Fast Open"
+    echo "5. QUIC优化"
     sleep 2
 }
 
 # 版本更新
 update() {
-    echo -e "${YELLOW}正在检查更新...${NC}"
+    printf "%b正在检查更新...%b\n" "${YELLOW}" "${NC}"
     
     # 备份当前配置
-    cp /etc/hysteria/config.yaml /etc/hysteria/config.yaml.bak
+    cp /etc/hysteria/config.yaml /etc/hysteria/config.yaml.bak 2>/dev/null
     
-    if curl -fsSL https://get.hy2.dev/ | bash; then
-        echo -e "${GREEN}更新成功${NC}"
-        systemctl restart hysteria-server
-    else
-        echo -e "${RED}更新失败${NC}"
-        # 恢复配置
-        mv /etc/hysteria/config.yaml.bak /etc/hysteria/config.yaml
+    # 尝试多个下载源
+    local urls=(
+        "https://mirror.ghproxy.com/https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64"
+        "https://gh.ddlc.top/https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64"
+        "https://hub.gitmirror.com/https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64"
+    )
+    
+    local success=false
+    for url in "${urls[@]}"; do
+        printf "%b尝试从 %s 下载...%b\n" "${YELLOW}" "$url" "${NC}"
+        if wget -O /usr/local/bin/hysteria.new "$url" && 
+           chmod +x /usr/local/bin/hysteria.new &&
+           /usr/local/bin/hysteria.new version >/dev/null 2>&1; then
+            mv /usr/local/bin/hysteria.new /usr/local/bin/hysteria
+            printf "%b更新成功%b\n" "${GREEN}" "${NC}"
+            success=true
+            break
+        fi
+        rm -f /usr/local/bin/hysteria.new
+    done
+    
+    if ! $success; then
+        if curl -fsSL https://get.hy2.dev/ | bash; then
+            printf "%b更新成功%b\n" "${GREEN}" "${NC}"
+        else
+            printf "%b更新失败%b\n" "${RED}" "${NC}"
+            [ -f /etc/hysteria/config.yaml.bak ] && \
+                mv /etc/hysteria/config.yaml.bak /etc/hysteria/config.yaml
+            return 1
+        fi
     fi
     
+    systemctl restart hysteria-server
     sleep 2
 }
 
 # 完全卸载
 uninstall() {
-    echo -e "${YELLOW}正在卸载...${NC}"
-    
-    systemctl stop hysteria-server
-    systemctl disable hysteria-server
-    
-    rm -rf /etc/hysteria
-    rm -rf /root/H2
-    rm -f /usr/local/bin/hysteria
-    rm -f /usr/local/bin/h2
-    rm -f /etc/systemd/system/hysteria-server.service
-    rm -f /etc/sysctl.d/99-hysteria.conf
-    rm -f /etc/security/limits.d/99-hysteria.conf
-    rm -f /rm -f /root/{main,server,client,config}.sh
-    
-    systemctl daemon-reload
-    
-    echo -e "${GREEN}卸载完成${NC}"
-    exit 0
+    printf "%b═══════ 卸载确认 ═══════%b\n" "${YELLOW}" "${NC}"
+    read -p "确定要卸载Hysteria吗？(y/n): " confirm
+    if [[ $confirm == [yY] ]]; then
+        printf "%b正在卸载...%b\n" "${YELLOW}" "${NC}"
+        
+        systemctl stop hysteria-server
+        systemctl disable hysteria-server
+        
+        rm -rf /etc/hysteria
+        rm -rf /root/H2
+        rm -f /usr/local/bin/hysteria
+        rm -f /usr/local/bin/h2
+        rm -f /etc/systemd/system/hysteria-server.service
+        rm -f /etc/sysctl.d/99-hysteria.conf
+        rm -f /etc/security/limits.d/99-hysteria.conf
+        rm -f /root/{main,server,client,config}.sh
+        
+        systemctl daemon-reload
+        
+        printf "%b卸载完成%b\n" "${GREEN}" "${NC}"
+        exit 0
+    fi
 }
 
 # 根据参数执行对应功能
@@ -510,20 +718,20 @@ CONFIGEOF
     cat > /usr/local/bin/h2 << 'CMDEOF'
 #!/bin/bash
 cd /root
-[ "$EUID" -ne 0 ] && echo -e "\033[0;31m请使用root权限运行此脚本\033[0m" && exit 1
+[ "$EUID" -ne 0 ] && printf "\033[0;31m请使用root权限运行此脚本\033[0m\n" && exit 1
 bash ./main.sh
 CMDEOF
     chmod +x /usr/local/bin/h2
 
-    echo -e "${GREEN}所有模块脚本创建完成${NC}"
+    printf "%b所有模块脚本创建完成%b\n" "${GREEN}" "${NC}"
 }
 
-# 清理函数
+# 清理旧的安装
 cleanup_old_installation() {
-    echo -e "${YELLOW}清理旧的安装...${NC}"
-    systemctl stop hysteria-server 2>/dev/null || true
-    systemctl disable hysteria-server 2>/dev/null || true
-    pkill -f hysteria || true
+    printf "%b清理旧的安装...%b\n" "${YELLOW}" "${NC}"
+    systemctl stop hysteria-server 2>/dev/null
+    systemctl disable hysteria-server 2>/dev/null
+    pkill -f hysteria
     
     rm -rf /etc/hysteria
     rm -rf /root/H2
@@ -532,28 +740,28 @@ cleanup_old_installation() {
     rm -f /etc/systemd/system/hysteria-server.service
     rm -f /etc/sysctl.d/99-hysteria.conf
     rm -f /etc/security/limits.d/99-hysteria.conf
-    rm -f /root/{main,server,client,config}.sh
+        rm -f /root/{main,server,client,config}.sh
     
     systemctl daemon-reload
 }
 
 # 安装基础依赖
 install_base() {
-    echo -e "${YELLOW}安装基础依赖...${NC}"
+    printf "%b安装基础依赖...%b\n" "${YELLOW}" "${NC}"
     if [ -f /etc/debian_version ]; then
         apt update
-        apt install -y curl wget openssl
+        apt install -y curl wget openssl net-tools
     elif [ -f /etc/redhat-release ]; then
-        yum install -y curl wget openssl
+        yum install -y curl wget openssl net-tools
     else
-        echo -e "${RED}不支持的系统${NC}"
+        printf "%b不支持的系统%b\n" "${RED}" "${NC}"
         exit 1
     fi
 }
 
 # 安装Hysteria
 install_hysteria() {
-    echo -e "${YELLOW}开始安装Hysteria...${NC}"
+    printf "%b开始安装Hysteria...%b\n" "${YELLOW}" "${NC}"
     
     local urls=(
         "https://mirror.ghproxy.com/https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64"
@@ -562,49 +770,64 @@ install_hysteria() {
     )
     
     for url in "${urls[@]}"; do
-        echo -e "${YELLOW}尝试从 ${url} 下载...${NC}"
+        printf "%b尝试从 %s 下载...%b\n" "${YELLOW}" "$url" "${NC}"
         if wget -O /usr/local/bin/hysteria "$url" && 
-           chmod +x /usr/local/bin/hysteria && 
+           chmod +x /usr/local/bin/hysteria &&
            /usr/local/bin/hysteria version >/dev/null 2>&1; then
-            echo -e "${GREEN}Hysteria安装成功${NC}"
+            printf "%bHysteria安装成功%b\n" "${GREEN}" "${NC}"
             return 0
         fi
     done
     
     if curl -fsSL https://get.hy2.dev/ | bash; then
-        echo -e "${GREEN}Hysteria安装成功${NC}"
+        printf "%bHysteria安装成功%b\n" "${GREEN}" "${NC}"
         return 0
     fi
 
-    echo -e "${RED}Hysteria安装失败${NC}"
+    printf "%bHysteria安装失败%b\n" "${RED}" "${NC}"
     return 1
+}
+
+# 创建systemd服务
+create_systemd_service() {
+    printf "%b创建systemd服务...%b\n" "${YELLOW}" "${NC}"
+    
+    cat > /etc/systemd/system/hysteria-server.service << EOF
+[Unit]
+Description=Hysteria Server
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/hysteria server -c /etc/hysteria/config.yaml
+Restart=always
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable hysteria-server
+    printf "%bSystemd服务创建完成%b\n" "${GREEN}" "${NC}"
 }
 
 # 主函数
 main() {
     clear
-    echo -e "${GREEN}════════ Hysteria 管理脚本 安装程序 ════════${NC}"
-    echo -e "${GREEN}作者: ${AUTHOR}${NC}"
-    echo -e "${GREEN}版本: ${VERSION}${NC}"
-    echo -e "${GREEN}============================================${NC}"
+    printf "%b════════ Hysteria 管理脚本 安装程序 ════════%b\n" "${GREEN}" "${NC}"
+    printf "%b作者: ${AUTHOR}%b\n" "${GREEN}" "${NC}"
+    printf "%b版本: ${VERSION}%b\n" "${GREEN}" "${NC}"
+    printf "%b============================================%b\n" "${GREEN}" "${NC}"
     
-    # 清理旧安装
     cleanup_old_installation
-    
-    # 安装基础依赖
-    install_base
-    
-    # 安装Hysteria
-    install_hysteria || {
-        echo -e "${RED}Hysteria 安装失败，请检查网络或手动安装${NC}"
-        exit 1
-    }
-    
-    # 创建所有脚本
+    install_base || exit 1
+    install_hysteria || exit 1
     create_all_scripts
+    create_systemd_service
     
-    echo -e "\n${GREEN}安装完成！${NC}"
-    echo -e "使用 ${YELLOW}h2${NC} 命令启动管理面板"
+    printf "\n%b安装完成！%b\n" "${GREEN}" "${NC}"
+    printf "使用 %bh2%b 命令启动管理面板\n" "${YELLOW}" "${NC}"
 }
 
 main
