@@ -138,21 +138,21 @@ check_service() {
 generate_server_config() {
     printf "%b开始生成配置...%b\n" "${YELLOW}" "${NC}"
     
-    # 获取 SOCKS5 端口
-    local socks_port
+    # 获取 http 端口
+    local http_port
     while true; do
-        read -p "请输入SOCKS5端口 [1080]: " socks_port
-        socks_port=${socks_port:-1080}
+        read -p "请输入http端口 [1080]: " http_port
+        http_port=${http_port:-1080}
         
         # 检查端口合法性
-        if ! [[ "$socks_port" =~ ^[0-9]+$ ]] || [ "$socks_port" -lt 1 ] || [ "$socks_port" -gt 65535 ]; then
+        if ! [[ "$http_port" =~ ^[0-9]+$ ]] || [ "$http_port" -lt 1 ] || [ "$http_port" -gt 65535 ]; then
             printf "%b错误: 请输入有效的端口号 (1-65535)%b\n" "${RED}" "${NC}"
             continue
         fi
         
         # 检查端口占用
-        if netstat -tuln | grep -q ":$socks_port "; then
-            printf "%b端口 %s 已被占用，请选择其他端口%b\n" "${RED}" "$socks_port" "${NC}"
+        if netstat -tuln | grep -q ":$http_port "; then
+            printf "%b端口 %s 已被占用，请选择其他端口%b\n" "${RED}" "$http_port" "${NC}"
             continue
         fi
         break
@@ -215,7 +215,7 @@ EOF
     
     printf "%b生成客户端配置...%b\n" "${YELLOW}" "${NC}"
     # 生成客户端配置
-    local client_config="/root/${domain}_${port}_${socks_port}.json"
+    local client_config="/root/${domain}_${port}_${http_port}.json"
     cat > "$client_config" << EOF
 {
     "server": "$domain:$port",
@@ -241,8 +241,8 @@ EOF
         "up": "190 mbps",
         "down": "190 mbps"
     },
-    "socks5": {
-        "listen": "0.0.0.0:$socks_port"
+    "http": {
+        "listen": "0.0.0.0:$http_port"
     }
 }
 EOF
@@ -252,7 +252,7 @@ EOF
     echo "客户端配置：${client_config}"
     echo "服务器IP：${domain}"
     echo "服务端口：${port}"
-    echo "SOCKS5端口：${socks_port}"
+    echo "http端口：${http_port}"
     echo "验证密码：${password}"
     
     return 0
