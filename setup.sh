@@ -160,12 +160,12 @@ generate_server_config() {
     
     # 获取IP地址
     printf "%b正在获取服务器IP...%b\n" "${YELLOW}" "${NC}"
-# 使用国内可以稳定访问的IP查询服务
-local domain=$(curl -s ipinfo.io/ip || curl -s myip.ipip.net | grep -oE "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" || curl -s https://api.ip.sb/ip)
-if [ -z "$domain" ]; then
-    printf "%b警告: 无法自动获取公网IP，请手动输入%b\n" "${YELLOW}" "${NC}"
-    read -p "请输入服务器公网IP: " domain
-fi
+    # 使用国内可以稳定访问的IP查询服务
+    local domain=$(curl -s ipinfo.io/ip || curl -s myip.ipip.net | grep -oE "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" || curl -s https://api.ip.sb/ip)
+    if [ -z "$domain" ]; then
+        printf "%b警告: 无法自动获取公网IP，请手动输入%b\n" "${YELLOW}" "${NC}"
+        read -p "请输入服务器公网IP: " domain
+    fi
 
     # 设置其他参数
     local port=443
@@ -209,8 +209,8 @@ quic:
   maxConnReceiveWindow: 53687090
 
 bandwidth:
-  up: 200 mbps
-  down: 200 mbps
+  up: 190 mbps
+  down: 190 mbps
 EOF
     
     printf "%b生成客户端配置...%b\n" "${YELLOW}" "${NC}"
@@ -238,8 +238,8 @@ EOF
         "maxConnReceiveWindow": 53687090
     },
     "bandwidth": {
-        "up": "60 mbps",
-        "down": "60 mbps"
+        "up": "65 mbps",
+        "down": "65 mbps"
     },
     "http": {
         "listen": "0.0.0.0:$http_port"
@@ -321,6 +321,15 @@ service_control() {
             ;;
         "restart")
             printf "%b正在重启服务...%b" "${GREEN}" "${NC}"
+            
+            # 查找占用端口的进程并杀掉
+            local port=$(grep -Po 'listen: :\K\d+' "$HYSTERIA_CONFIG")
+            if netstat -tuln | grep -q ":$port "; then
+                printf "%b端口 %s 已被占用，正在杀掉占用进程...%b\n" "${RED}" "$port" "${NC}"
+                fuser -k "$port/tcp"
+                fuser -k "$port/udp"
+            fi
+            
             systemctl restart hysteria-server &
             for ((i=1; i<=max_wait; i++)); do
                 if systemctl is-active hysteria-server >/dev/null 2>&1; then
