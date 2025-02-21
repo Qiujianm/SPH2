@@ -16,13 +16,13 @@ print_status() {
     local message=$2
     case "$type" in
         "info")
-            printf "%b[信息]%b %s" "${GREEN}" "${NC}" "$message"
+            printf "%b[信息]%b %s\n" "${GREEN}" "${NC}" "$message"
             ;;
         "warn")
-            printf "%b[警告]%b %s" "${YELLOW}" "${NC}" "$message"
+            printf "%b[警告]%b %s\n" "${YELLOW}" "${NC}" "$message"
             ;;
         "error")
-            printf "%b[错误]%b %s" "${RED}" "${NC}" "$message"
+            printf "%b[错误]%b %s\n" "${RED}" "${NC}" "$message"
             ;;
     esac
 }
@@ -85,7 +85,7 @@ while true; do
     esac
 done
 MAINEOF
-    chmod +x /root/main.sh
+    chmod +x /root/hysteria/main.sh
 
     # 创建并赋权 server.sh
 cat > /root/hysteria/server.sh << 'SERVEREOF'
@@ -134,7 +134,6 @@ check_service() {
 }
 
 # 生成服务端配置
-# 在 server.sh 中修改 generate_server_config 函数
 generate_server_config() {
     printf "%b开始生成配置...%b\n" "${YELLOW}" "${NC}"
     
@@ -160,7 +159,6 @@ generate_server_config() {
     
     # 获取IP地址
     printf "%b正在获取服务器IP...%b\n" "${YELLOW}" "${NC}"
-    # 使用国内可以稳定访问的IP查询服务
     local domain=$(curl -s ipinfo.io/ip || curl -s myip.ipip.net | grep -oE "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" || curl -s https://api.ip.sb/ip)
     if [ -z "$domain" ]; then
         printf "%b警告: 无法自动获取公网IP，请手动输入%b\n" "${YELLOW}" "${NC}"
@@ -172,11 +170,9 @@ generate_server_config() {
     local password=$(openssl rand -base64 16)
     
     printf "%b创建配置目录...%b\n" "${YELLOW}" "${NC}"
-    # 创建必要的目录
     mkdir -p /etc/hysteria
     
     printf "%b生成SSL证书...%b\n" "${YELLOW}" "${NC}"
-    # 生成证书
     if ! openssl req -x509 -newkey rsa:4096 -nodes -sha256 -days 365 \
         -keyout /etc/hysteria/server.key -out /etc/hysteria/server.crt \
         -subj "/CN=$domain" 2>/dev/null; then
@@ -185,7 +181,6 @@ generate_server_config() {
     fi
     
     printf "%b生成服务端配置...%b\n" "${YELLOW}" "${NC}"
-    # 生成服务端配置
     cat > ${HYSTERIA_CONFIG} << EOF
 listen: :$port
 
@@ -205,8 +200,8 @@ masquerade:
 quic:
   initStreamReceiveWindow: 26843545
   maxStreamReceiveWindow: 26843545
-  initConnReceiveWindow: 53687090
-  maxConnReceiveWindow: 53687090
+  initConnReceiveWindow: 67108864
+  maxConnReceiveWindow: 67108864
 
 bandwidth:
   up: 190 mbps
@@ -214,7 +209,6 @@ bandwidth:
 EOF
     
     printf "%b生成客户端配置...%b\n" "${YELLOW}" "${NC}"
-    # 生成客户端配置
     local client_config="/root/${domain}_${port}_${http_port}.json"
     cat > "$client_config" << EOF
 {
@@ -234,8 +228,8 @@ EOF
     "quic": {
         "initStreamReceiveWindow": 26843545,
         "maxStreamReceiveWindow": 26843545,
-        "initConnReceiveWindow": 53687090,
-        "maxConnReceiveWindow": 53687090
+        "initConnReceiveWindow": 67108864,
+        "maxConnReceiveWindow": 67108864
     },
     "bandwidth": {
         "up": "65 mbps",
@@ -409,7 +403,7 @@ case "$1" in
         ;;
 esac
 SERVEREOF
-    chmod +x /root/server.sh
+    chmod +x /root/hysteria/server.sh
 
     # 创建并赋权 client.sh
 cat > /root/hysteria/client.sh << 'CLIENTEOF'
@@ -542,7 +536,7 @@ stop_all_clients() {
     printf "%b共停止了 %d 个客户端%b\n" "${GREEN}" "$count" "${NC}"
 }
 
-# 改进的状态检查函数
+# 状态检查函数
 check_all_clients() {
     clear
     printf "%b═══════ 客户端状态检查 ═══════%b\n\n" "${GREEN}" "${NC}"
@@ -593,58 +587,6 @@ check_all_clients() {
     fi
 }
 
-# 改进启动函数的状态检查
-start_single_client() {
-    config_file=$1
-    if [ ! -f "$config_file" ]; then
-        printf "%b未找到配置文件: %s%b\n" "${RED}" "$config_file" "${NC}"
-        return 1
-    fi
-
-    # 获取端口
-    local port=$(grep -oP '"listen": "0.0.0.0:\K\d+' "$config_file" || grep -oP '"socks5".*"listen": "0.0.0.0:\K\d+' "$config_file")
-    local pid_file="/root/hysteria-client-${port}.pid"
-    local log_file="/var/log/hysteria-client-${port}.log"
-
-    printf "%b启动端口 %s 的客户端...%b\n" "${YELLOW}" "$port" "${NC}"
-    
-    # 如果已经运行，先停止
-    if [ -f "$pid_file" ]; then
-        kill $(cat "$pid_file") 2>/dev/null
-        rm -f "$pid_file"
-        sleep 1
-    fi
-
-    # 启动客户端
-    nohup hysteria client -c "$config_file" --log-level info > "$log_file" 2>&1 &
-    pid=$!
-    echo $pid > "$pid_file"
-
-    # 等待启动
-    printf "等待连接建立"
-    for i in {1..10}; do
-        if ! ps -p $pid >/dev/null 2>&1; then
-            printf "\n%b启动失败，查看日志:%b\n" "${RED}" "${NC}"
-            tail -n 5 "$log_file"
-            rm -f "$pid_file"
-            return 1
-        fi
-
-        if grep -q "connected to server" "$log_file" || grep -q "use this URI to share your server" "$log_file"; then
-            printf "\n%b✓ 连接成功%b\n" "${GREEN}" "${NC}"
-            return 0
-        fi
-        printf "."
-        sleep 1
-    done
-
-    # 如果超时但进程在运行
-    if ps -p $pid >/dev/null 2>&1; then
-        printf "\n%b! 进程已启动但未确认连接状态，最新日志:%b\n" "${YELLOW}" "${NC}"
-        tail -n 5 "$log_file"
-    fi
-}
-
 # 主菜单
 while true; do
     clear
@@ -682,11 +624,9 @@ while true; do
         3)
             stop_all_clients
             ;;
-    4) # 重启所有客户端
-        clear
-        printf "%b════════ 重启所有客户端 ════════%b\n" "${GREEN}" "${NC}"
-        restart_all_clients
-        ;;
+        4)
+            restart_all_clients
+            ;;
         5)
             check_all_clients
             ;;
@@ -695,7 +635,7 @@ while true; do
             ls -l /root/*.json 2>/dev/null || echo "无配置文件"
             echo
             read -p "请输入要删除的配置文件名称: " filename
-            if [ -f "/root/$filename" ]; then
+            if [ -f "/root/$filename" ];then
                 rm -f "/root/$filename"
                 printf "%b配置文件已删除%b\n" "${GREEN}" "${NC}"
             else
@@ -713,7 +653,7 @@ while true; do
     read -n 1 -s -r -p "按任意键继续..."
 done
 CLIENTEOF
-    chmod +x /root/client.sh
+    chmod +x /root/hysteria/client.sh
 
     # 创建并赋权 config.sh
 cat > /root/hysteria/config.sh << 'CONFIGEOF'
@@ -727,6 +667,21 @@ NC='\033[0m'
 optimize() {
     printf "%b正在优化系统配置...%b\n" "${YELLOW}" "${NC}"
     
+    # 提供用户选择模式
+    printf "%b请选择拥塞控制模式:%b\n" "${YELLOW}" "${NC}"
+    echo "1. Brutal 拥塞控制"
+    echo "2. tcp_nanqinlang 拥塞控制"
+    read -p "请输入选择 [1-2]: " congestion_control_choice
+
+    if [ "$congestion_control_choice" -eq 1 ]; then
+        congestion_control="brutal"
+    elif [ "$congestion_control_choice" -eq 2 ]; then
+        congestion_control="nanqinlang"
+    else
+        printf "%b无效选择，默认使用 Brutal 拥塞控制%b\n" "${RED}" "${NC}"
+        congestion_control="brutal"
+    fi
+    
     # 创建sysctl配置文件
     cat > /etc/sysctl.d/99-hysteria.conf << EOF
 # 设置16MB缓冲区
@@ -737,11 +692,9 @@ net.core.wmem_default=16777216
 # TCP缓冲区设置
 net.ipv4.tcp_rmem=4096 87380 16777216
 net.ipv4.tcp_wmem=4096 87380 16777216
-# 启用Brutal拥塞控制
+# 启用 $congestion_control 拥塞控制
 net.core.default_qdisc=fq
-net.ipv4.tcp_congestion_control=brutal
-# 启用 tcp_nanqinlang 相关设置
-net.ipv4.tcp_congestion_control=nanqinlang
+net.ipv4.tcp_congestion_control=$congestion_control
 # 其他网络优化
 net.ipv4.tcp_fastopen=3
 net.ipv4.tcp_slow_start_after_idle=0
@@ -761,6 +714,18 @@ root soft nofile 1000000
 root hard nofile 1000000
 EOF
 
+    # 创建优先级配置文件
+    mkdir -p /etc/systemd/system/hysteria-server.service.d
+    cat > /etc/systemd/system/hysteria-server.service.d/priority.conf << EOF
+[Service]
+CPUSchedulingPolicy=rr
+CPUSchedulingPriority=99
+EOF
+
+    # 重载 systemd 配置文件并重启服务
+    systemctl daemon-reload
+    systemctl restart hysteria-server.service
+
     # 立即设置当前会话的缓冲区
     sysctl -w net.core.rmem_max=16777216
     sysctl -w net.core.wmem_max=16777216
@@ -768,10 +733,10 @@ EOF
     printf "%b系统优化完成，已设置：%b\n" "${GREEN}" "${NC}"
     echo "1. 发送/接收缓冲区: 16MB"
     echo "2. 文件描述符限制: 1000000"
-    echo "3. Brutal拥塞控制"
-    echo "4. tcp_nanqinlang 拥塞控制"
-    echo "5. TCP Fast Open"
-    echo "6. QUIC优化"
+    echo "3. $congestion_control 拥塞控制"
+    echo "4. TCP Fast Open"
+    echo "5. QUIC优化"
+    echo "6. CPU 调度优先级"
     sleep 2
 }
 
@@ -848,7 +813,7 @@ case "$1" in
         ;;
 esac
 CONFIGEOF
-    chmod +x /root/config.sh
+    chmod +x /root/hysteria/config.sh
 
     # 创建启动器命令
     cat > /usr/local/bin/h2 << 'CMDEOF'
@@ -876,7 +841,7 @@ cleanup_old_installation() {
     rm -f /etc/systemd/system/hysteria-server.service
     rm -f /etc/sysctl.d/99-hysteria.conf
     rm -f /etc/security/limits.d/99-hysteria.conf
-        rm -f /root/{main,server,client,config}.sh
+    rm -f /root/{main,server,client,config}.sh
     
     systemctl daemon-reload
 }
