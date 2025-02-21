@@ -740,6 +740,8 @@ net.ipv4.tcp_wmem=4096 87380 16777216
 # 启用Brutal拥塞控制
 net.core.default_qdisc=fq
 net.ipv4.tcp_congestion_control=brutal
+# 启用 tcp_nanqinlang 相关设置
+net.ipv4.tcp_congestion_control=nanqinlang
 # 其他网络优化
 net.ipv4.tcp_fastopen=3
 net.ipv4.tcp_slow_start_after_idle=0
@@ -767,8 +769,9 @@ EOF
     echo "1. 发送/接收缓冲区: 16MB"
     echo "2. 文件描述符限制: 1000000"
     echo "3. Brutal拥塞控制"
-    echo "4. TCP Fast Open"
-    echo "5. QUIC优化"
+    echo "4. tcp_nanqinlang 拥塞控制"
+    echo "5. TCP Fast Open"
+    echo "6. QUIC优化"
     sleep 2
 }
 
