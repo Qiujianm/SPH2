@@ -8,6 +8,21 @@ NC='\033[0m'
 optimize() {
     printf "%b正在优化系统配置...%b\n" "${YELLOW}" "${NC}"
     
+    # 提供用户选择模式
+    printf "%b请选择拥塞控制模式:%b\n" "${YELLOW}" "${NC}"
+    echo "1. Brutal 拥塞控制"
+    echo "2. tcp_nanqinlang 拥塞控制"
+    read -p "请输入选择 [1-2]: " congestion_control_choice
+
+    if [ "$congestion_control_choice" -eq 1 ]; then
+        congestion_control="brutal"
+    elif [ "$congestion_control_choice" -eq 2 ]; then
+        congestion_control="nanqinlang"
+    else
+        printf "%b无效选择，默认使用 Brutal 拥塞控制%b\n" "${RED}" "${NC}"
+        congestion_control="brutal"
+    fi
+    
     # 创建sysctl配置文件
     cat > /etc/sysctl.d/99-hysteria.conf << EOF
 # 设置16MB缓冲区
@@ -18,9 +33,9 @@ net.core.wmem_default=16777216
 # TCP缓冲区设置
 net.ipv4.tcp_rmem=4096 87380 16777216
 net.ipv4.tcp_wmem=4096 87380 16777216
-# 启用Brutal拥塞控制
+# 启用 $congestion_control 拥塞控制
 net.core.default_qdisc=fq
-net.ipv4.tcp_congestion_control=brutal
+net.ipv4.tcp_congestion_control=$congestion_control
 # 其他网络优化
 net.ipv4.tcp_fastopen=3
 net.ipv4.tcp_slow_start_after_idle=0
@@ -40,6 +55,18 @@ root soft nofile 1000000
 root hard nofile 1000000
 EOF
 
+    # 创建优先级配置文件
+    mkdir -p /etc/systemd/system/hysteria-server.service.d
+    cat > /etc/systemd/system/hysteria-server.service.d/priority.conf << EOF
+[Service]
+CPUSchedulingPolicy=rr
+CPUSchedulingPriority=99
+EOF
+
+    # 重载 systemd 配置文件并重启服务
+    systemctl daemon-reload
+    systemctl restart hysteria-server.service
+
     # 立即设置当前会话的缓冲区
     sysctl -w net.core.rmem_max=16777216
     sysctl -w net.core.wmem_max=16777216
@@ -47,9 +74,10 @@ EOF
     printf "%b系统优化完成，已设置：%b\n" "${GREEN}" "${NC}"
     echo "1. 发送/接收缓冲区: 16MB"
     echo "2. 文件描述符限制: 1000000"
-    echo "3. Brutal拥塞控制"
+    echo "3. $congestion_control 拥塞控制"
     echo "4. TCP Fast Open"
     echo "5. QUIC优化"
+    echo "6. CPU 调度优先级"
     sleep 2
 }
 
