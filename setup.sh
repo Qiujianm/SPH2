@@ -166,17 +166,7 @@ generate_server_config() {
     fi
 
     # 设置其他参数
-    local port
-    while true; do
-        read -p "请输入端口跳跃范围 (例如 50000-60000): " port_range
-        IFS="-" read min_port max_port <<< "$port_range"
-        if [[ ! "$min_port" =~ ^[0-9]+$ ]] || [[ ! "$max_port" =~ ^[0-9]+$ ]] || [ "$min_port" -ge "$max_port" ]; then
-            printf "%b错误: 请输入有效的端口范围%b\n" "${RED}" "${NC}"
-            continue
-        fi
-        break
-    done
-
+    local port=443
     local password=$(openssl rand -base64 16)
     
     printf "%b创建配置目录...%b\n" "${YELLOW}" "${NC}"
@@ -192,7 +182,7 @@ generate_server_config() {
     
     printf "%b生成服务端配置...%b\n" "${YELLOW}" "${NC}"
     cat > ${HYSTERIA_CONFIG} << EOF
-listen: :$min_port
+listen: :$port
 
 tls:
   cert: /etc/hysteria/server.crt
@@ -216,18 +206,40 @@ quic:
 bandwidth:
   up: 195 mbps
   down: 195 mbps
+EOF
+    
+    # 获取端口跳跃范围
+    read -p "请输入端口跳跃范围 (例如 50000-60000): " port_range
+    if [ -n "$port_range" ]; then
+        IFS="-" read min_port max_port <<< "$port_range"
+        if [[ "$min_port" =~ ^[0-9]+$ ]] && [[ "$max_port" =~ ^[0-9]+$ ]] && [ "$min_port" -lt "$max_port" ]; then
+            cat >> ${HYSTERIA_CONFIG} << EOF
 
 port_hopping:
   enabled: true
   min_port: $min_port
   max_port: $max_port
 EOF
-    
+            # 清除原有的iptables规则
+            iptables -F
+            # 配置新的iptables规则
+            for (( port=$min_port; port<=$max_port; port++ )); do
+                iptables -A INPUT -p udp --dport $port -j ACCEPT
+                iptables -A INPUT -p tcp --dport $port -j ACCEPT
+            done
+        else
+            printf "%b错误: 请输入有效的端口范围%b\n" "${RED}" "${NC}"
+        fi
+    else
+        # 保留默认的iptables配置，即所有端口开放
+        iptables -P INPUT ACCEPT
+    fi
+
     printf "%b生成客户端配置...%b\n" "${YELLOW}" "${NC}"
-    local client_config="/root/${domain}_${min_port}_${http_port}.json"
+    local client_config="/root/${domain}_${port}_${http_port}.json"
     cat > "$client_config" << EOF
 {
-    "server": "$domain:$min_port",
+    "server": "$domain:$port",
     "auth": "$password",
     "transport": {
         "type": "udp",
@@ -260,7 +272,7 @@ EOF
     echo "服务端配置：${HYSTERIA_CONFIG}"
     echo "客户端配置：${client_config}"
     echo "服务器IP：${domain}"
-    echo "服务端口：${min_port}"
+    echo "服务端口：${port}"
     echo "http端口：${http_port}"
     echo "验证密码：${password}"
     
