@@ -208,34 +208,64 @@ bandwidth:
   down: 195 mbps
 EOF
     
-    # 获取端口跳跃范围
-    read -p "请输入端口跳跃范围 (例如 50000-60000): " port_range
-    if [ -n "$port_range" ]; then
-        IFS="-" read min_port max_port <<< "$port_range"
-        if [[ "$min_port" =~ ^[0-9]+$ ]] && [[ "$max_port" =~ ^[0-9]+$ ]] && [ "$min_port" -lt "$max_port" ]; then
-            cat >> ${HYSTERIA_CONFIG} << EOF
+# 获取端口跳跃范围
+read -p "是否启用端口跳跃 (y/n): " enable_port_hopping
+if [ "$enable_port_hopping" == "y" ]; then
+    read -p "请输入端口跳跃范围 (例如 20000-50000): " port_range
+    IFS="-" read min_port max_port <<< "$port_range"
+    if [[ "$min_port" =~ ^[0-9]+$ ]] && [[ "$max_port" =~ ^[0-9]+$ ]] && [ "$min_port" -lt "$max_port" ]; then
+        cat >> ${HYSTERIA_CONFIG} << EOF
 
 port_hopping:
   enabled: true
   min_port: $min_port
   max_port: $max_port
 EOF
-            # 清除原有的iptables规则
-            iptables -F
-            # 配置新的iptables规则
-            for (( port=$min_port; port<=$max_port; port++ )); do
-                iptables -A INPUT -p udp --dport $port -j ACCEPT
-                iptables -A INPUT -p tcp --dport $port -j ACCEPT
-            done
-        else
-            printf "%b错误: 请输入有效的端口范围%b\n" "${RED}" "${NC}"
-        fi
-    else
-        # 保留默认的iptables配置，即所有端口开放
-        iptables -P INPUT ACCEPT
-    fi
+        # 清除原有的iptables规则
+        sudo iptables -F
+        sudo ip6tables -F
 
-    printf "%b生成客户端配置...%b\n" "${YELLOW}" "${NC}"
+        # 使用 DNAT 规则
+        sudo iptables -t nat -A PREROUTING -i eth0 -p udp --dport $min_port:$max_port -j DNAT --to-destination 127.0.0.1:$port
+        sudo ip6tables -t nat -A PREROUTING -i eth0 -p udp --dport $min_port:$max_port -j DNAT --to-destination 127.0.0.1:$port
+
+        # 生成客户端配置
+        local client_config="/root/${domain}_${min_port}-${max_port}_${http_port}.json"
+        cat > "$client_config" << EOF
+{
+    "server": "$domain:$min_port-$max_port",
+    "auth": "$password",
+    "transport": {
+        "type": "udp",
+        "udp": {
+            "hopInterval": "10s"
+        }
+    },
+    "tls": {
+        "sni": "https://www.bing.com",
+        "insecure": true,
+        "alpn": ["h3"]
+    },
+    "quic": {
+        "initStreamReceiveWindow": 26843545,
+        "maxStreamReceiveWindow": 26843545,
+        "initConnReceiveWindow": 67108864,
+        "maxConnReceiveWindow": 67108864
+    },
+    "bandwidth": {
+        "up": "195 mbps",
+        "down": "195 mbps"
+    },
+    "http": {
+        "listen": "0.0.0.0:$http_port"
+    }
+}
+EOF
+    else
+        printf "%b错误: 请输入有效的端口范围%b\n" "${RED}" "${NC}"
+    fi
+else
+    # 默认单一端口配置
     local client_config="/root/${domain}_${port}_${http_port}.json"
     cat > "$client_config" << EOF
 {
@@ -267,6 +297,7 @@ EOF
     }
 }
 EOF
+fi
 
     printf "%b配置生成完成：%b\n" "${GREEN}" "${NC}"
     echo "服务端配置：${HYSTERIA_CONFIG}"
