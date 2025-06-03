@@ -513,234 +513,139 @@ SERVEREOF
     # 创建并赋权 client.sh
 cat > /root/hysteria/client.sh << 'CLIENTEOF'
 #!/bin/bash
+
+# 自动生成 systemd 多实例模板（如已存在则跳过）
+SERVICE_FILE="/etc/systemd/system/hysteriaclient@.service"
+if [ ! -f "$SERVICE_FILE" ]; then
+  cat > "$SERVICE_FILE" <<EOF
+[Unit]
+Description=Hysteria Client Instance %i
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/hysteria client -c /root/%i.json
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  echo -e "\033[1;32m已自动生成 $SERVICE_FILE\033[0m"
+  systemctl daemon-reload
+fi
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 NC='\033[0m'
 
-# 启动单个客户端
-start_single_client() {
-    config_file=$1
-    if [ ! -f "$config_file" ]; then
-        printf "%b未找到配置文件: %s%b\n" "${RED}" "$config_file" "${NC}"
-        return 1
-    fi
-    port=$(grep -oP '"listen": "0.0.0.0:\K\d+' "$config_file")
-    pid_file="/root/hysteria-client-${port}.pid"
+# 【自动批量注册 systemd 实例，支持 auto_enable_all 参数，可用于开机自启动】
+if [[ "$1" == "auto_enable_all" ]]; then
+  shopt -s nullglob
+  for cfg in /root/*.json; do
+    name=$(basename "${cfg%.json}")
+    systemctl enable --now hysteriaclient@"$name"
+  done
+  exit 0
+fi
 
-    printf "%b启动端口 %s 的客户端...%b\n" "${YELLOW}" "$port" "${NC}"
-    # 如果已经运行，先停止
-    if [ -f "$pid_file" ] && ps -p $(cat "$pid_file") >/dev/null 2>&1; then
-        kill $(cat "$pid_file") 2>/dev/null
-        rm -f "$pid_file"
-        sleep 1
-    fi
-
-    nohup hysteria client -c "$config_file" --log-level info > "/var/log/hysteria-client-${port}.log" 2>&1 &
-    pid=$!
-    echo $pid > "$pid_file"
-
-    printf "等待端口 %s " "$port"
-    for i in {1..5}; do
-        if ! ps -p $pid >/dev/null 2>&1; then
-            printf "\n%b启动失败，查看日志: /var/log/hysteria-client-%s.log%b\n" "${RED}" "$port" "${NC}"
-            rm -f "$pid_file"
-            return 1
-        fi
-        if netstat -tuln | grep -q ":$port "; then
-            printf "\n%b✓ 端口 %s 启动成功%b\n" "${GREEN}" "$port" "${NC}"
-            return 0
-        fi
-        printf "."
-        sleep 1
+# 自动注册并启动所有配置到 systemd
+auto_systemd_enable_all() {
+    echo -e "${YELLOW}正在自动写入并启动/root/*.json配置到 systemd ...${NC}"
+    shopt -s nullglob
+    found=0
+    for cfg in /root/*.json; do
+        [ -f "$cfg" ] || continue
+        name=$(basename "${cfg%.json}")
+        systemctl enable --now hysteriaclient@"$name" &>/dev/null
+        echo -e "${GREEN}已注册并启动/守护实例：$name${NC}"
+        found=1
     done
-    printf "\n%b! 进程运行但端口 %s 未监听%b\n" "${YELLOW}" "$port" "${NC}"
-}
-
-# 启动所有客户端
-start_all_clients() {
-    local configs=(/root/*.json)
-    local success=0
-    local failed=0
-    for config in "${configs[@]}"; do
-        [ -f "$config" ] || continue
-        printf "\n%b正在启动 %s%b\n" "${GREEN}" "$(basename "$config")" "${NC}"
-        if start_single_client "$config"; then
-            ((success++))
-        else
-            ((failed++))
-        fi
-    done
-    printf "\n%b全部启动完成: 成功 %d, 失败 %d%b\n" "${GREEN}" "$success" "$failed" "${NC}"
-}
-
-# 启动其余未运行的客户端
-start_remaining_clients() {
-    printf "%b检查并启动未运行的客户端...%b\n" "${YELLOW}" "${NC}"
-    local configs=(/root/*.json)
-    local started=0
-    local skipped=0
-    for config in "${configs[@]}"; do
-        [ -f "$config" ] || continue
-        port=$(grep -oP '"listen": "0.0.0.0:\K\d+' "$config")
-        pid_file="/root/hysteria-client-${port}.pid"
-        if [ -f "$pid_file" ] && ps -p $(cat "$pid_file") >/dev/null 2>&1; then
-            printf "%b已在运行，跳过: %s%b\n" "${GREEN}" "$(basename "$config")" "${NC}"
-            ((skipped++))
-        else
-            printf "%b正在启动: %s%b\n" "${YELLOW}" "$(basename "$config")" "${NC}"
-            if start_single_client "$config"; then
-                ((started++))
-            fi
-        fi
-    done
-    printf "\n%b本次共启动 %d 个客户端，跳过 %d 个已运行客户端。%b\n" "${GREEN}" "$started" "$skipped" "${NC}"
-}
-
-# 停止所有客户端
-stop_all_clients() {
-    printf "%b停止所有客户端...%b\n" "${YELLOW}" "${NC}"
-    local count=0
-    for pid_file in /root/hysteria-client-*.pid; do
-        [ -f "$pid_file" ] || continue
-        port=$(basename "$pid_file" | sed 's/hysteria-client-\([0-9]*\).pid/\1/')
-        if kill $(cat "$pid_file") 2>/dev/null; then
-            printf "%b✓ 已停止端口 %s 的客户端%b\n" "${GREEN}" "$port" "${NC}"
-            ((count++))
-        fi
-        rm -f "$pid_file"
-    done
-    printf "%b共停止了 %d 个客户端%b\n" "${GREEN}" "$count" "${NC}"
-}
-
-# 彻底清理所有客户端进程
-cleanup_all_clients() {
-    printf "%b清理所有客户端进程...%b\n" "${YELLOW}" "${NC}"
-    for pid_file in /root/hysteria-client-*.pid; do
-        [ -f "$pid_file" ] || continue
-        kill $(cat "$pid_file") 2>/dev/null
-        rm -f "$pid_file"
-    done
-    local pids=$(ps aux | grep 'hysteria client' | grep -v grep | awk '{print $2}')
-    if [ -n "$pids" ]; then
-        printf "发现遗留进程，正在清理...\n"
-        for pid in $pids; do
-            kill -9 $pid 2>/dev/null
-            printf "%b终止进程 PID: %s%b\n" "${GREEN}" "$pid" "${NC}"
-        done
-    fi
-    sleep 2
-}
-
-# 重启所有客户端
-restart_all_clients() {
-    printf "%b开始重启所有客户端...%b\n" "${YELLOW}" "${NC}"
-    cleanup_all_clients
-    start_all_clients
-}
-
-# 状态检查函数
-check_all_clients() {
-    printf "%b═══════ 客户端状态检查 ═══════%b\n\n" "${GREEN}" "${NC}"
-    local current_time=$(date "+%Y-%m-%d %H:%M:%S")
-    printf "检查时间: %s\n\n" "$current_time"
-    local configs=(/root/*.json)
-    local config_count=${#configs[@]}
-    local pids=($(ps aux | grep 'hysteria client' | grep -v grep | awk '{print $2}'))
-    local running_count=${#pids[@]}
-    printf "%b运行中的Hysteria客户端进程：%b\n" "${GREEN}" "${NC}"
-    printf "%-8s %-35s %-15s %-15s\n" "PID" "配置文件" "监听端口" "状态"
-    printf "%-8s %-35s %-15s %-15s\n" "---" "--------" "--------" "----"
-    for pid in "${pids[@]}"; do
-        if ps -p $pid >/dev/null 2>&1; then
-            local cmd=$(ps -p $pid -o args=)
-            local config_file=$(echo "$cmd" | grep -o '/root/[^[:space:]]*\.json')
-            if [ -f "$config_file" ]; then
-                local base_config=$(basename "$config_file")
-                local port=$(grep -oP '"listen": "0.0.0.0:\K\d+' "$config_file" || grep -oP '"socks5".*"listen": "0.0.0.0:\K\d+' "$config_file")
-                printf "%-8s %-35s %-15s %-15s\n" \
-                    "$pid" \
-                    "$base_config" \
-                    "$port" \
-                    "运行正常"
-            fi
-        fi
-    done
-    printf "\n%b总结:%b\n" "${GREEN}" "${NC}"
-    printf "发现 %d 个配置文件\n" "$config_count"
-    printf "运行 %d 个Hysteria客户端进程\n" "$running_count"
-    if [ $running_count -eq 0 ]; then
-        printf "\n%b未发现运行中的Hysteria客户端进程%b\n" "${RED}" "${NC}"
+    if [ $found -eq 0 ]; then
+        echo -e "${RED}未发现/root下的配置文件！${NC}"
     fi
 }
 
-# 删除客户端配置
-delete_client_config() {
-    printf "\n%b可用的配置文件：%b\n" "${YELLOW}" "${NC}"
+# 停止全部客户端
+stop_all() {
+    shopt -s nullglob
+    for cfg in /root/*.json; do
+        [ -f "$cfg" ] || continue
+        name=$(basename "${cfg%.json}")
+        systemctl stop hysteriaclient@"$name" &>/dev/null
+        echo -e "${YELLOW}已停止 $name${NC}"
+    done
+}
+
+# 重启全部客户端
+restart_all() {
+    shopt -s nullglob
+    for cfg in /root/*.json; do
+        [ -f "$cfg" ] || continue
+        name=$(basename "${cfg%.json}")
+        systemctl restart hysteriaclient@"$name" &>/dev/null
+        echo -e "${GREEN}已重启 $name${NC}"
+    done
+}
+
+# 查看所有客户端 systemd 状态
+status_all() {
+    echo -e "${YELLOW}所有客户端 systemd 状态：${NC}"
+    shopt -s nullglob
+    for cfg in /root/*.json; do
+        name=$(basename "${cfg%.json}")
+        echo -e "${GREEN}[$name]${NC}"
+        systemctl --no-pager --full status hysteriaclient@"$name" | grep -E "Active:|Loaded:" | head -n 2
+        echo "---------------------------------------"
+    done
+}
+
+# 删除客户端配置并禁用服务
+delete_config() {
+    echo -e "${YELLOW}可用的配置文件：${NC}"
     ls -l /root/*.json 2>/dev/null || echo "无配置文件"
-    read -p "请输入要删除的配置文件名称: " filename
-    if [ -f "/root/$filename" ];then
-        rm -f "/root/$filename"
-        printf "%b配置文件已删除%b\n" "${GREEN}" "${NC}"
+    read -p "请输入要删除的配置文件名称（不带.json）: " name
+    if [ -f "/root/$name.json" ]; then
+        systemctl disable --now hysteriaclient@"$name"
+        rm -f "/root/$name.json"
+        echo -e "${GREEN}配置文件 $name 已删除并禁用服务${NC}"
+        rm -f "/var/log/hysteria-client-$name.log"
     else
-        printf "%b文件不存在%b\n" "${RED}" "${NC}"
+        echo -e "${RED}文件不存在${NC}"
     fi
 }
 
-# 主菜单
+# 展示所有配置
+list_configs() {
+    echo -e "${YELLOW}可用的配置文件：${NC}"
+    ls -l /root/*.json 2>/dev/null || echo "无配置文件"
+}
+
 while true; do
-    printf "%b═══════ Hysteria 客户端管理 ═══════%b\n" "${GREEN}" "${NC}"
-    echo "1. 启动单个客户端"
-    echo "2. 启动所有客户端"
-    echo "3. 停止所有客户端"
-    echo "4. 启动其余客户端"
-    echo "5. 重启所有客户端"
-    echo "6. 查看客户端状态"
-    echo "7. 删除客户端配置"
-    echo "0. 返回主菜单"
-    printf "%b====================================%b\n" "${GREEN}" "${NC}"
-    read -t 60 -p "请选择 [0-7]: " choice || {
-        printf "\n%b操作超时，返回主菜单%b\n" "${YELLOW}" "${NC}"
-        exit 0
-    }
-    case $choice in
-        1)
-            printf "%b可用的配置文件：%b\n" "${YELLOW}" "${NC}"
-            ls -l /root/*.json 2>/dev/null || echo "无配置文件"
-            read -p "请输入要启动的配置文件名: " filename
-            if [ -f "/root/$filename" ]; then
-                start_single_client "/root/$filename"
-            else
-                printf "%b文件不存在%b\n" "${RED}" "${NC}"
-            fi
-            ;;
-        2)
-            start_all_clients
-            ;;
-        3)
-            stop_all_clients
-            ;;
-        4)
-            start_remaining_clients
-            ;;
-        5)
-            restart_all_clients
-            ;;
-        6)
-            check_all_clients
-            ;;
-        7)
-            delete_client_config
-            ;;
-        0)
-            exit 0
-            ;;
-        *)
-            printf "%b无效选择%b\n" "${RED}" "${NC}"
-            ;;
-    esac
-    read -n 1 -s -r -p "按任意键继续..."
     clear
+    echo -e "${GREEN}==== Hysteria Client Systemd 管理 ====${NC}"
+    echo "1. 自动注册并启动所有配置到 systemd"
+    echo "2. 停止全部客户端"
+    echo "3. 重启全部客户端"
+    echo "4. 查看所有客户端状态"
+    echo "5. 删除客户端配置"
+    echo "6. 展示所有配置"
+    echo "0. 退出"
+    read -t 60 -p "请选择 [0-6]: " choice || exit 0
+
+    case $choice in
+        1) auto_systemd_enable_all ;;
+        2) stop_all ;;
+        3) restart_all ;;
+        4) status_all ;;
+        5) delete_config ;;
+        6) list_configs ;;
+        0) exit ;;
+        *) echo -e "${RED}无效选择${NC}" ;;
+    esac
+
+    read -n 1 -s -r -p "按任意键继续..."
 done
 CLIENTEOF
     chmod +x /root/hysteria/client.sh
