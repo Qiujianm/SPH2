@@ -90,7 +90,6 @@ generate_instances_batch() {
 
     while read -r proxy_raw; do
         [[ -z "$proxy_raw" ]] && continue
-        # 跳过被占用端口
         while is_port_in_use "$current_port" || [ -f "$CONFIG_DIR/config_${current_port}.yaml" ]; do
             echo "端口 $current_port 已被占用，尝试下一个端口..."
             current_port=$((current_port + 1))
@@ -188,8 +187,17 @@ list_instances_and_delete() {
         status=$(systemctl is-active hysteria-server@"$port".service 2>/dev/null)
         echo "端口: $port | 配置: $config | 状态: $status"
     done
-    read -p "是否要删除某实例？输入端口号删除，直接回车跳过: " port
-    [[ -n "$port" ]] && delete_instance "$port"
+    echo
+    read -p "要删除请输入端口号，输入 all 删除所有，直接回车仅查看: " port
+    if [[ "$port" == "all" ]]; then
+        for f in $CONFIG_DIR/config_*.yaml; do
+            p=$(basename "$f" | sed 's/^config_//;s/\.yaml$//')
+            delete_instance "$p"
+        done
+        echo -e "${GREEN}所有实例已删除。${NC}"
+    elif [[ -n "$port" ]]; then
+        delete_instance "$port"
+    fi
 }
 
 delete_instance() {
@@ -372,7 +380,7 @@ main_menu() {
     while true; do
         echo -e "${GREEN}===== Hysteria2 多实例批量管理 =====${NC}"
         echo "1. 批量新建实例"
-        echo "2. 查看所有实例 & 删除某实例"
+        echo "2. 查看所有实例 & 删除某实例/所有实例"
         echo "3. 启动/停止/重启某实例"
         echo "4. 查看某实例状态"
         echo "5. 启动/停止/重启所有实例"
