@@ -493,6 +493,8 @@ main_menu() {
     done
 }
 
+main_menu
+
 case "$1" in
     "install")
         generate_server_config
