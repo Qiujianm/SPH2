@@ -90,142 +90,153 @@ MAINEOF
     # 创建并赋权 server.sh
 cat > /root/hysteria/server.sh << 'SERVEREOF'
 #!/bin/bash
-RED='\033[0;31m'
+
+set -e
+
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
+RED='\033[0;31m'
 NC='\033[0m'
 
-# 配置文件路径
-HYSTERIA_CONFIG="/etc/hysteria/config.yaml"
+HYSTERIA_BIN="/usr/local/bin/hysteria"
+SYSTEMD_DIR="/etc/systemd/system"
+CONFIG_DIR="/etc/hysteria"
 
-# 端口检查函数
-check_port() {
+check_env() {
+    if ! command -v openssl >/dev/null 2>&1; then
+        echo "请先安装 openssl"
+        exit 1
+    fi
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "请先安装 curl"
+        exit 1
+    fi
+    if [ ! -f "$HYSTERIA_BIN" ]; then
+        echo "请先安装 hysteria"
+        exit 1
+    fi
+    mkdir -p "$CONFIG_DIR"
+}
+
+gen_cert() {
+    local domain=$1
+    local crt="$CONFIG_DIR/server_${domain}.crt"
+    local key="$CONFIG_DIR/server_${domain}.key"
+    if [ ! -f "$crt" ] || [ ! -f "$key" ]; then
+        openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 365 \
+            -keyout "$key" -out "$crt" -subj "/CN=$domain" 2>/dev/null
+    fi
+    echo "$crt|$key"
+}
+
+create_systemd_unit() {
     local port=$1
-    if netstat -tuln | grep -qE ":${port}\b"; then
-        printf "%b端口 $port 已被占用%b\n" "${RED}" "${NC}"
-        return 1
-    fi
-    return 0
+    local config_file=$2
+    local unit_file="${SYSTEMD_DIR}/hysteria-server@${port}.service"
+    cat >"$unit_file" <<EOF
+[Unit]
+Description=Hysteria2 Server Instance on port $port
+After=network.target
+
+[Service]
+ExecStart=$HYSTERIA_BIN server -c $config_file
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable "hysteria-server@${port}.service" >/dev/null 2>&1
 }
 
-# 服务检查函数
-check_service() {
-    printf "%b正在检查服务状态...%b\n" "${YELLOW}" "${NC}"
-    
-    # 检查配置文件
-    if [ ! -f "$HYSTERIA_CONFIG" ]; then
-        printf "%b错误: 配置文件不存在%b\n" "${RED}" "${NC}"
-        return 1
-    fi
-    
-    # 检查证书文件
-    if [ ! -f "/etc/hysteria/server.crt" ] || [ ! -f "/etc/hysteria/server.key" ]; then
-        printf "%b错误: 证书文件不存在%b\n" "${RED}" "${NC}"
-        return 1
-    fi
-    
-    # 检查程序
-    if [ ! -f "/usr/local/bin/hysteria" ]; then
-        printf "%b错误: Hysteria程序不存在%b\n" "${RED}" "${NC}"
-        return 1
-    fi
-    
-    return 0
+is_port_in_use() {
+    local port=$1
+    ss -lnt | awk '{print $4}' | grep -q ":$port\$"
 }
 
-# 生成服务端配置
-generate_server_config() {
-    printf "%b开始生成配置...%b\n" "${YELLOW}" "${NC}"
-    
-    # 获取 http 端口
-    local http_port
-    while true; do
-        read -p "请输入http端口 [1080]: " http_port
-        http_port=${http_port:-1080}
-        
-        # 检查端口合法性
-        if ! [[ "$http_port" =~ ^[0-9]+$ ]] || [ "$http_port" -lt 1 ] || [ "$http_port" -gt 65535 ]; then
-            printf "%b错误: 请输入有效的端口号 (1-65535)%b\n" "${RED}" "${NC}"
-            continue
-        fi
-        
-        # 检查端口占用
-        if netstat -tuln | grep -q ":$http_port "; then
-            printf "%b端口 %s 已被占用，请选择其他端口%b\n" "${RED}" "$http_port" "${NC}"
-            continue
-        fi
-        break
+generate_instances_batch() {
+    echo -e "${YELLOW}请输入每个实例的带宽上下行限制（单位 mbps，直接回车为默认185）：${NC}"
+    read -p "上行带宽 [185]: " up_bw
+    read -p "下行带宽 [185]: " down_bw
+    up_bw=${up_bw:-185}
+    down_bw=${down_bw:-185}
+
+    echo -e "${YELLOW}请粘贴所有代理（每行为一组，格式: IP:端口:用户名:密码），输入完毕后Ctrl+D:${NC}"
+    proxies=""
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ -z "$line" ]] && continue
+        proxies+="$line"$'\n'
     done
-    
-    # 获取IP地址
-    printf "%b正在获取服务器IP...%b\n" "${YELLOW}" "${NC}"
+
+    read -p "请输入批量新建实例的起始端口: " start_port
+    current_port="$start_port"
+
     local domain=$(curl -s ipinfo.io/ip || curl -s myip.ipip.net | grep -oE "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" || curl -s https://api.ip.sb/ip)
     if [ -z "$domain" ]; then
-        printf "%b警告: 无法自动获取公网IP，请手动输入%b\n" "${YELLOW}" "${NC}"
         read -p "请输入服务器公网IP: " domain
     fi
+    local crt_and_key; crt_and_key=$(gen_cert "$domain")
+    local crt=$(echo "$crt_and_key" | cut -d'|' -f1)
+    local key=$(echo "$crt_and_key" | cut -d'|' -f2)
 
-    # 设置其他参数
-    local port=443
-    local password=$(openssl rand -base64 16)
-    
-    printf "%b创建配置目录...%b\n" "${YELLOW}" "${NC}"
-    mkdir -p /etc/hysteria
-    
-    printf "%b生成SSL证书...%b\n" "${YELLOW}" "${NC}"
-    if ! openssl req -x509 -newkey rsa:4096 -nodes -sha256 -days 365 \
-        -keyout /etc/hysteria/server.key -out /etc/hysteria/server.crt \
-        -subj "/CN=$domain" 2>/dev/null; then
-        printf "%b证书生成失败%b\n" "${RED}" "${NC}"
-        return 1
-    fi
-    
-    printf "%b生成服务端配置...%b\n" "${YELLOW}" "${NC}"
-    cat > ${HYSTERIA_CONFIG} << EOF
-listen: :$port
+    while read -r proxy_raw; do
+        [[ -z "$proxy_raw" ]] && continue
+        while is_port_in_use "$current_port" || [ -f "$CONFIG_DIR/config_${current_port}.yaml" ]; do
+            echo "端口 $current_port 已被占用，尝试下一个端口..."
+            current_port=$((current_port + 1))
+        done
+
+        IFS=':' read -r proxy_ip proxy_port proxy_user proxy_pass <<< "$proxy_raw"
+        http_port="$current_port"
+        current_port=$((current_port + 1))
+        password=$(openssl rand -base64 16)
+        proxy_url="http://$proxy_user:$proxy_pass@$proxy_ip:$proxy_port"
+        config_file="$CONFIG_DIR/config_${http_port}.yaml"
+
+        cat >"$config_file" <<EOF
+listen: :$http_port
 
 tls:
-  cert: /etc/hysteria/server.crt
-  key: /etc/hysteria/server.key
+  cert: $crt
+  key: $key
 
 auth:
   type: password
   password: $password
+
+masquerade:
+  proxy:
+    url: https://www.bing.com
+    rewriteHost: true
 
 quic:
   initStreamReceiveWindow: 26843545
   maxStreamReceiveWindow: 26843545
   initConnReceiveWindow: 67108864
   maxConnReceiveWindow: 67108864
-  
+
+bandwidth:
+  up: ${up_bw} mbps
+  down: ${down_bw} mbps
+
+outbounds:
+  - name: my_proxy
+    type: http
+    http:
+      url: $proxy_url
+
+acl:
+  inline:
+    - my_proxy(all)
 EOF
-    
-# 获取端口跳跃范围
-read -p "是否启用端口跳跃 (y/n): " enable_port_hopping
-if [ "$enable_port_hopping" == "y" ]; then
-    read -p "请输入端口跳跃范围 (例如 20000-50000): " port_range
-    IFS="-" read min_port max_port <<< "$port_range"
-    if [[ "$min_port" =~ ^[0-9]+$ ]] && [[ "$max_port" =~ ^[0-9]+$ ]] && [ "$min_port" -lt "$max_port" ]; then
-        cat >> ${HYSTERIA_CONFIG} << EOF
 
-port_hopping:
-  enabled: true
-  min_port: $min_port
-  max_port: $max_port
-EOF
-        # 清除原有的iptables规则
-        sudo iptables -F
-        sudo ip6tables -F
+        create_systemd_unit "$http_port" "$config_file"
+        systemctl restart "hysteria-server@${http_port}.service"
 
-        # 使用 DNAT 规则
-        sudo iptables -t nat -A PREROUTING -i eth0 -p udp --dport $min_port:$max_port -j DNAT --to-destination 127.0.0.1:$port
-        sudo ip6tables -t nat -A PREROUTING -i eth0 -p udp --dport $min_port:$max_port -j DNAT --to-destination 127.0.0.1:$port
-
-        # 生成客户端配置
-        local client_config="/root/${domain}_${min_port}-${max_port}_${http_port}.json"
-        cat > "$client_config" << EOF
+        local client_cfg="/root/${domain}_${http_port}.json"
+        cat >"$client_cfg" <<EOF
 {
-    "server": "$domain:$port",
+    "server": "$domain:$http_port",
     "auth": "$password",
     "transport": {
         "type": "udp",
@@ -234,6 +245,7 @@ EOF
         }
     },
     "tls": {
+        "sni": "https://www.bing.com",
         "insecure": true,
         "alpn": ["h3"]
     },
@@ -244,200 +256,239 @@ EOF
         "maxConnReceiveWindow": 67108864
     },
     "bandwidth": {
-        "up": "185 mbps",
-        "down": "185 mbps"
+        "up": "${up_bw} mbps",
+        "down": "${down_bw} mbps"
     },
     "http": {
         "listen": "0.0.0.0:$http_port"
     }
 }
 EOF
-    else
-        printf "%b错误: 请输入有效的端口范围%b\n" "${RED}" "${NC}"
+        echo -e "\n${GREEN}已生成端口 $http_port 实例，密码：$password"
+        echo "服务端配置: $config_file"
+        echo "客户端配置: $client_cfg"
+        echo "--------------------------------------${NC}"
+    done <<< "$proxies"
+}
+
+list_instances_and_delete() {
+    echo -e "${GREEN}当前已部署的实例:${NC}"
+    ls $CONFIG_DIR/config_*.yaml 2>/dev/null | while read -r config; do
+        port=$(basename "$config" | sed 's/^config_//;s/\.yaml$//')
+        status=$(systemctl is-active hysteria-server@"$port".service 2>/dev/null)
+        echo "端口: $port | 配置: $config | 状态: $status"
+    done
+    echo
+    read -p "要删除请输入端口号，输入 all 删除所有，直接回车仅查看: " port
+    if [[ "$port" == "all" ]]; then
+        for f in $CONFIG_DIR/config_*.yaml; do
+            p=$(basename "$f" | sed 's/^config_//;s/\.yaml$//')
+            delete_instance "$p"
+        done
+        echo -e "${GREEN}所有实例已删除。${NC}"
+    elif [[ -n "$port" ]]; then
+        delete_instance "$port"
     fi
-else
-    # 默认单一端口配置
-    local client_config="/root/${domain}_${port}_${http_port}.json"
-    cat > "$client_config" << EOF
-{
-    "server": "$domain:$port",
-    "auth": "$password",
-    "transport": {
-        "type": "udp",
-        "udp": {
-            "hopInterval": "10s"
-        }
-    },
-    "tls": {
-        "insecure": true,
-        "alpn": ["h3"]
-    },
-    "quic": {
-        "initStreamReceiveWindow": 26843545,
-        "maxStreamReceiveWindow": 26843545,
-        "initConnReceiveWindow": 67108864,
-        "maxConnReceiveWindow": 67108864
-    },
-    "bandwidth": {
-        "up": "185 mbps",
-        "down": "185 mbps"
-    },
-    "http": {
-        "listen": "0.0.0.0:$http_port"
-    }
-}
-EOF
-fi
-
-    printf "%b配置生成完成：%b\n" "${GREEN}" "${NC}"
-    echo "服务端配置：${HYSTERIA_CONFIG}"
-    echo "客户端配置：${client_config}"
-    echo "服务器IP：${domain}"
-    echo "服务端口：${port}"
-    echo "http端口：${http_port}"
-    echo "验证密码：${password}"
-    
-    return 0
 }
 
-# 服务控制函数
-service_control() {
-    local action=$1
-    local max_wait=5
-    
-    # 辅助函数：检查具体错误
-    check_error() {
-        printf "\n%b正在进行故障诊断...%b\n" "${YELLOW}" "${NC}"
-        
-        # 检查配置文件
-        printf "\n%b检查配置文件内容:%b\n" "${YELLOW}" "${NC}"
-        cat "$HYSTERIA_CONFIG"
-        
-        # 检查端口占用
-        printf "\n%b检查端口占用:%b\n" "${YELLOW}" "${NC}"
-        local port=$(grep -Po 'listen: :\K\d+' "$HYSTERIA_CONFIG")
-        if netstat -tuln | grep -q ":$port "; then
-            printf "%b端口 $port 已被占用%b\n" "${RED}" "${NC}"
-            netstat -tuln | grep ":$port "
-        fi
-        
-        # 检查证书文件
-        printf "\n%b检查证书文件:%b\n" "${YELLOW}" "${NC}"
-        if ! [ -r "/etc/hysteria/server.crt" ] || ! [ -r "/etc/hysteria/server.key" ]; then
-            printf "%b证书文件不存在或无法读取%b\n" "${RED}" "${NC}"
-            ls -l /etc/hysteria/server.{crt,key}
-        fi
-        
-        # 检查日志
-        printf "\n%b最近的错误日志:%b\n" "${YELLOW}" "${NC}"
-        journalctl -u hysteria-server --no-pager -n 20
-    }
-    
-    case "$action" in
-        "start")
-            printf "%b正在启动服务...%b" "${GREEN}" "${NC}"
-            ./iptables.sh start $min_port $max_port
-            systemctl start hysteria-server &
-            for ((i=1; i<=max_wait; i++)); do
-                if systemctl is-active hysteria-server >/dev/null 2>&1; then
-                    printf "\r%b[成功]%b 服务启动成功\n" "${GREEN}" "${NC}"
-                    return 0
-                fi
-                printf "."
-                sleep 1
-            done
-            printf "\r%b[失败]%b 服务启动失败\n" "${RED}" "${NC}"
-            check_error
-            ;;
-        "stop")
-            printf "%b正在停止服务...%b" "${GREEN}" "${NC}"
-            systemctl stop hysteria-server &
-            ./iptables.sh stop $min_port $max_port
-            for ((i=1; i<=max_wait; i++)); do
-                if ! systemctl is-active hysteria-server >/dev/null 2>&1; then
-                    printf "\r%b[完成]%b 服务已停止\n" "${YELLOW}" "${NC}"
-                    return 0
-                fi
-                printf "."
-                sleep 1
-            done
-            printf "\r%b[失败]%b 服务停止失败\n" "${RED}" "${NC}"
-            ;;
-        "restart")
-            printf "%b正在重启服务...%b" "${GREEN}" "${NC}"
-            
-            # 查找占用端口的进程并杀掉
-            local port=$(grep -Po 'listen: :\K\d+' "$HYSTERIA_CONFIG")
-            if netstat -tuln | grep -q ":$port "; then
-                printf "%b端口 %s 已被占用，正在杀掉占用进程...%b\n" "${RED}" "$port" "${NC}"
-                fuser -k "$port/tcp"
-                fuser -k "$port/udp"
-            fi
-            
-            ./iptables.sh stop $min_port $max_port
-            systemctl restart hysteria-server &
-            ./iptables.sh start $min_port $max_port
-            for ((i=1; i<=max_wait; i++)); do
-                if systemctl is-active hysteria-server >/dev/null 2>&1; then
-                    printf "\r%b[成功]%b 服务重启成功\n" "${GREEN}" "${NC}"
-                    return 0
-                fi
-                printf "."
-                sleep 1
-            done
-            printf "\r%b[失败]%b 服务重启失败\n" "${RED}" "${NC}"
-            check_error
-            ;;
-        "status")
-            if ! timeout 2 systemctl status hysteria-server; then
-                printf "\n%b[错误]%b 服务状态异常\n" "${RED}" "${NC}"
-                check_error
-            fi
-            ;;
+delete_instance() {
+    port="$1"
+    config_file="$CONFIG_DIR/config_${port}.yaml"
+    unit_file="${SYSTEMD_DIR}/hysteria-server@${port}.service"
+    if [ -f "$config_file" ]; then
+        systemctl stop "hysteria-server@${port}.service" >/dev/null 2>&1
+        systemctl disable "hysteria-server@${port}.service" >/dev/null 2>&1
+        rm -f "$config_file" "$unit_file"
+        systemctl daemon-reload
+        echo "实例 $port 已删除。"
+    else
+        echo -e "${RED}未找到端口 $port 的配置。${NC}"
+    fi
+}
+
+manage_single_instance() {
+    read -p "请输入实例端口号: " port
+    echo "1. 启动  2. 停止  3. 重启"
+    read -p "请选择操作[1-3]: " act
+    case "$act" in
+        1) systemctl start hysteria-server@$port.service ;;
+        2) systemctl stop hysteria-server@$port.service ;;
+        3) systemctl restart hysteria-server@$port.service ;;
+        *) echo "无效选择" ;;
     esac
 }
 
-# 服务端管理菜单
-server_menu() {
-    while true; do
-        clear
-        printf "%b═══════ Hysteria 服务端管理 ═══════%b\n" "${GREEN}" "${NC}"
-        echo "1. 启动服务端"
-        echo "2. 停止服务端"
-        echo "3. 重启服务端"
-        echo "4. 查看服务端状态"
-        echo "6. 全自动生成配置"
-        echo "7. 手动生成配置"
-        echo "0. 返回主菜单"
-        printf "%b====================================%b\n" "${GREEN}" "${NC}"
-        
-        read -t 60 -p "请选择 [0-7]: " option || {
-            printf "\n%b操作超时，返回主菜单%b\n" "${YELLOW}" "${NC}"
-            return
-        }
+status_single_instance() {
+    read -p "请输入实例端口号: " port
+    systemctl status hysteria-server@$port.service
+}
 
-        case $option in
-            1|2|3|4)
-                case $option in
-                    1) service_control "start";;
-                    2) service_control "stop";;
-                    3) service_control "restart";;
-                    4) service_control "status";;
-                esac
-                read -t 30 -n 1 -s -r -p "按任意键继续..."
-                ;;
-            6|7)
-                generate_server_config
-                service_control "restart"
-                read -t 30 -n 1 -s -r -p "按任意键继续..."
-                ;;
-            0)
-                return
-                ;;
-            *)
-                printf "%b无效选择%b\n" "${RED}" "${NC}"
-                sleep 1
-                ;;
+manage_all_instances() {
+    echo "1. 启动全部  2. 停止全部  3. 重启全部"
+    read -p "请选择操作[1-3]: " act
+    for f in $CONFIG_DIR/config_*.yaml; do
+        port=$(basename "$f" | sed 's/^config_//;s/\.yaml$//')
+        case "$act" in
+            1) systemctl start hysteria-server@$port.service ;;
+            2) systemctl stop hysteria-server@$port.service ;;
+            3) systemctl restart hysteria-server@$port.service ;;
+            *) echo "无效选择" ;;
+        esac
+    done
+}
+
+status_all_instances() {
+    for f in $CONFIG_DIR/config_*.yaml; do
+        port=$(basename "$f" | sed 's/^config_//;s/\.yaml$//')
+        status=$(systemctl is-active hysteria-server@$port.service 2>/dev/null)
+        echo "端口: $port | 状态: $status"
+    done
+}
+
+generate_instance_auto() {
+    echo -e "${YELLOW}自动生成单实例配置:${NC}"
+    while true; do
+        read -p "请输入实例监听端口（如9202）: " http_port
+        [[ "$http_port" =~ ^[0-9]+$ ]] && [ "$http_port" -ge 1 ] && [ "$http_port" -le 65535 ] && break
+        echo -e "${RED}无效端口，请重新输入${NC}"
+    done
+
+    if is_port_in_use "$http_port" || [ -f "$CONFIG_DIR/config_${http_port}.yaml" ]; then
+        echo -e "${RED}端口 $http_port 已被占用或已存在实例，请换一个端口。${NC}"
+        return
+    fi
+
+    echo -e "${YELLOW}请输入带宽限制（单位 mbps，直接回车为默认185）：${NC}"
+    read -p "上行带宽 [185]: " up_bw
+    read -p "下行带宽 [185]: " down_bw
+    up_bw=${up_bw:-185}
+    down_bw=${down_bw:-185}
+
+    local domain=$(curl -s ipinfo.io/ip || curl -s myip.ipip.net | grep -oE "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" || curl -s https://api.ip.sb/ip)
+    if [ -z "$domain" ]; then
+        read -p "请输入服务器公网IP: " domain
+    fi
+    local crt_and_key; crt_and_key=$(gen_cert "$domain")
+    local crt=$(echo "$crt_and_key" | cut -d'|' -f1)
+    local key=$(echo "$crt_and_key" | cut -d'|' -f2)
+
+    password=$(openssl rand -base64 16)
+    echo -e "${YELLOW}本实例自动生成的密码:${NC} $password"
+
+    read -p "是否为该实例添加代理出口？(y/n): " add_proxy
+
+    local proxy_config=""
+    if [[ "$add_proxy" == "y" ]]; then
+        read -p "请输入代理信息（格式: IP:端口:用户名:密码）: " proxy_raw
+        IFS=':' read -r proxy_ip proxy_port proxy_user proxy_pass <<< "$proxy_raw"
+        proxy_url="http://$proxy_user:$proxy_pass@$proxy_ip:$proxy_port"
+        proxy_config="
+outbounds:
+  - name: my_proxy
+    type: http
+    http:
+      url: $proxy_url
+
+acl:
+  inline:
+    - my_proxy(all)"
+    fi
+
+    local config_file="$CONFIG_DIR/config_${http_port}.yaml"
+    cat >"$config_file" <<EOF
+listen: :$http_port
+
+tls:
+  cert: $crt
+  key: $key
+
+auth:
+  type: password
+  password: $password
+
+masquerade:
+  proxy:
+    url: https://www.bing.com
+    rewriteHost: true
+
+quic:
+  initStreamReceiveWindow: 26843545
+  maxStreamReceiveWindow: 26843545
+  initConnReceiveWindow: 67108864
+  maxConnReceiveWindow: 67108864
+
+bandwidth:
+  up: ${up_bw} mbps
+  down: ${down_bw} mbps
+$proxy_config
+EOF
+
+    create_systemd_unit "$http_port" "$config_file"
+    systemctl restart "hysteria-server@${http_port}.service"
+
+    local client_cfg="/root/${domain}_${http_port}.json"
+    cat >"$client_cfg" <<EOF
+{
+    "server": "$domain:$http_port",
+    "auth": "$password",
+    "transport": {
+        "type": "udp",
+        "udp": {
+            "hopInterval": "10s"
+        }
+    },
+    "tls": {
+        "sni": "https://www.bing.com",
+        "insecure": true,
+        "alpn": ["h3"]
+    },
+    "quic": {
+        "initStreamReceiveWindow": 26843545,
+        "maxStreamReceiveWindow": 26843545,
+        "initConnReceiveWindow": 67108864,
+        "maxConnReceiveWindow": 67108864
+    },
+    "bandwidth": {
+        "up": "${up_bw} mbps",
+        "down": "${down_bw} mbps"
+    },
+    "http": {
+        "listen": "0.0.0.0:$http_port"
+    }
+}
+EOF
+
+    echo -e "${GREEN}实例已创建并启动。${NC}"
+    echo "服务端配置文件: $config_file"
+    echo "客户端配置文件: $client_cfg"
+    echo "服务器IP: $domain"
+    echo "监听端口: $http_port"
+    echo "密码: $password"
+}
+
+main_menu() {
+    check_env
+    while true; do
+        echo -e "${GREEN}===== Hysteria2 多实例批量管理 =====${NC}"
+        echo "1. 批量新建实例"
+        echo "2. 查看所有实例 & 删除某实例/所有实例"
+        echo "3. 启动/停止/重启某实例"
+        echo "4. 查看某实例状态"
+        echo "5. 启动/停止/重启所有实例"
+        echo "6. 查看所有实例状态"
+        echo "7. 全自动生成单实例配置"
+        echo "0. 退出"
+        read -p "请选择[0-7]: " opt
+        case "$opt" in
+            1) generate_instances_batch ;;
+            2) list_instances_and_delete; read -p "按回车返回..." ;;
+            3) manage_single_instance ;;
+            4) status_single_instance ;;
+            5) manage_all_instances ;;
+            6) status_all_instances; read -p "按回车返回..." ;;
+            7) generate_instance_auto ;;
+            0) exit 0 ;;
+            *) echo "无效选择" ;;
         esac
     done
 }
