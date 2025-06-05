@@ -567,6 +567,25 @@ auto_systemd_enable_all() {
     fi
 }
 
+# 启动剩余未启动的实例
+start_remaining_instances() {
+    echo -e "${YELLOW}正在启动剩余未启动的实例...${NC}"
+    shopt -s nullglob
+    found=0
+    for cfg in /root/*.json; do
+        [ -f "$cfg" ] || continue
+        name=$(basename "${cfg%.json}")
+        if ! systemctl is-active --quiet hysteriaclient@"$name"; then
+            systemctl enable --now hysteriaclient@"$name" &>/dev/null
+            echo -e "${GREEN}已启动新增实例：$name${NC}"
+            found=1
+        fi
+    done
+    if [ $found -eq 0 ]; then
+        echo -e "${YELLOW}没有剩余未启动的实例${NC}"
+    fi
+}
+
 # 停止全部客户端
 stop_all() {
     shopt -s nullglob
@@ -601,12 +620,21 @@ status_all() {
     done
 }
 
-# 删除客户端配置并禁用服务
+# 删除客户端配置并禁用服务（支持单个和全部）
 delete_config() {
     echo -e "${YELLOW}可用的配置文件：${NC}"
     ls -l /root/*.json 2>/dev/null || echo "无配置文件"
-    read -p "请输入要删除的配置文件名称（不带.json）: " name
-    if [ -f "/root/$name.json" ]; then
+    read -p "请输入要删除的配置文件名称（不带.json，输入 all 删除全部）: " name
+    if [ "$name" == "all" ]; then
+        for cfg in /root/*.json; do
+            [ -f "$cfg" ] || continue
+            cname=$(basename "${cfg%.json}")
+            systemctl disable --now hysteriaclient@"$cname"
+            rm -f "/root/$cname.json"
+            rm -f "/var/log/hysteria-client-$cname.log"
+            echo -e "${GREEN}配置文件 $cname 已删除并禁用服务${NC}"
+        done
+    elif [ -f "/root/$name.json" ]; then
         systemctl disable --now hysteriaclient@"$name"
         rm -f "/root/$name.json"
         echo -e "${GREEN}配置文件 $name 已删除并禁用服务${NC}"
@@ -629,10 +657,11 @@ while true; do
     echo "2. 停止全部客户端"
     echo "3. 重启全部客户端"
     echo "4. 查看所有客户端状态"
-    echo "5. 删除客户端配置"
+    echo "5. 删除单个/全部客户端配置和实例"
     echo "6. 展示所有配置"
+    echo "7. 启动剩余未启动的实例"
     echo "0. 退出"
-    read -t 60 -p "请选择 [0-6]: " choice || exit 0
+    read -t 60 -p "请选择 [0-7]: " choice || exit 0
 
     case $choice in
         1) auto_systemd_enable_all ;;
@@ -641,6 +670,7 @@ while true; do
         4) status_all ;;
         5) delete_config ;;
         6) list_configs ;;
+        7) start_remaining_instances ;;
         0) exit ;;
         *) echo -e "${RED}无效选择${NC}" ;;
     esac
