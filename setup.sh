@@ -67,13 +67,13 @@ while true; do
     }
     
     case $choice in
-        1) bash ./server.sh install ;;
-        2) bash ./server.sh manage ;;
+        1) bash ./.sh install ;;
+        2) bash ./.sh manage ;;
         3) bash ./client.sh ;;
         4) bash ./config.sh optimize ;;
         5) bash ./config.sh update ;;
         6)
-            systemctl status hysteria-server
+            systemctl status hysteria-
             read -t 30 -n 1 -s -r -p "按任意键继续..."
             ;;
         7) bash ./config.sh uninstall ;;
@@ -181,17 +181,19 @@ generate_instances_batch() {
 
     while read -r proxy_raw; do
         [[ -z "$proxy_raw" ]] && continue
-        while is_port_in_use "$current_port" || [ -f "$CONFIG_DIR/config_${current_port}.yaml" ]; do
+        IFS=':' read -r proxy_ip proxy_port proxy_user proxy_pass <<< "$proxy_raw"
+
+        # 找到可用端口
+        while is_port_in_use "$current_port" || [ -f "$CONFIG_DIR/config_${proxy_ip}_${current_port}.yaml" ]; do
             echo "端口 $current_port 已被占用，尝试下一个端口..."
             current_port=$((current_port + 1))
         done
 
-        IFS=':' read -r proxy_ip proxy_port proxy_user proxy_pass <<< "$proxy_raw"
         http_port="$current_port"
         current_port=$((current_port + 1))
         password=$(openssl rand -base64 16)
         proxy_url="http://$proxy_user:$proxy_pass@$proxy_ip:$proxy_port"
-        config_file="$CONFIG_DIR/config_${http_port}.yaml"
+        config_file="$CONFIG_DIR/config_${proxy_ip}_${http_port}.yaml"
 
         cat >"$config_file" <<EOF
 listen: :$http_port
@@ -233,7 +235,7 @@ EOF
         create_systemd_unit "$http_port" "$config_file"
         systemctl restart "hysteria-server@${http_port}.service"
 
-        local client_cfg="/root/${domain}_${http_port}.json"
+        local client_cfg="/root/${proxy_ip}_${http_port}.json"
         cat >"$client_cfg" <<EOF
 {
     "server": "$domain:$http_port",
@@ -274,15 +276,16 @@ EOF
 list_instances_and_delete() {
     echo -e "${GREEN}当前已部署的实例:${NC}"
     ls $CONFIG_DIR/config_*.yaml 2>/dev/null | while read -r config; do
-        port=$(basename "$config" | sed 's/^config_//;s/\.yaml$//')
+        port=$(basename "$config" | sed -E 's/^config_(.*)_([0-9]+)\.yaml$/\2/')
+        proxy_ip=$(basename "$config" | sed -E 's/^config_(.*)_([0-9]+)\.yaml$/\1/')
         status=$(systemctl is-active hysteria-server@"$port".service 2>/dev/null)
-        echo "端口: $port | 配置: $config | 状态: $status"
+        echo "端口: $port | 代理IP: $proxy_ip | 配置: $config | 状态: $status"
     done
     echo
     read -p "要删除请输入端口号，输入 all 删除所有，直接回车仅查看: " port
     if [[ "$port" == "all" ]]; then
         for f in $CONFIG_DIR/config_*.yaml; do
-            p=$(basename "$f" | sed 's/^config_//;s/\.yaml$//')
+            p=$(basename "$f" | sed -E 's/^config_(.*)_([0-9]+)\.yaml$/\2/')
             delete_instance "$p"
         done
         echo -e "${GREEN}所有实例已删除。${NC}"
@@ -293,56 +296,21 @@ list_instances_and_delete() {
 
 delete_instance() {
     port="$1"
-    config_file="$CONFIG_DIR/config_${port}.yaml"
+    # 找到对应的配置文件
+    config_file=$(ls $CONFIG_DIR/config_*_${port}.yaml 2>/dev/null | head -n1)
     unit_file="${SYSTEMD_DIR}/hysteria-server@${port}.service"
     if [ -f "$config_file" ]; then
+        proxy_ip=$(basename "$config_file" | sed -E 's/^config_(.*)_([0-9]+)\.yaml$/\1/')
+        client_cfg="/root/${proxy_ip}_${port}.json"
         systemctl stop "hysteria-server@${port}.service" >/dev/null 2>&1
         systemctl disable "hysteria-server@${port}.service" >/dev/null 2>&1
-        rm -f "$config_file" "$unit_file"
+        rm -f "$config_file" "$unit_file" "$client_cfg"
         systemctl daemon-reload
         echo "实例 $port 已删除。"
+        echo "客户端配置 $client_cfg 已删除。"
     else
         echo -e "${RED}未找到端口 $port 的配置。${NC}"
     fi
-}
-
-manage_single_instance() {
-    read -p "请输入实例端口号: " port
-    echo "1. 启动  2. 停止  3. 重启"
-    read -p "请选择操作[1-3]: " act
-    case "$act" in
-        1) systemctl start hysteria-server@$port.service ;;
-        2) systemctl stop hysteria-server@$port.service ;;
-        3) systemctl restart hysteria-server@$port.service ;;
-        *) echo "无效选择" ;;
-    esac
-}
-
-status_single_instance() {
-    read -p "请输入实例端口号: " port
-    systemctl status hysteria-server@$port.service
-}
-
-manage_all_instances() {
-    echo "1. 启动全部  2. 停止全部  3. 重启全部"
-    read -p "请选择操作[1-3]: " act
-    for f in $CONFIG_DIR/config_*.yaml; do
-        port=$(basename "$f" | sed 's/^config_//;s/\.yaml$//')
-        case "$act" in
-            1) systemctl start hysteria-server@$port.service ;;
-            2) systemctl stop hysteria-server@$port.service ;;
-            3) systemctl restart hysteria-server@$port.service ;;
-            *) echo "无效选择" ;;
-        esac
-    done
-}
-
-status_all_instances() {
-    for f in $CONFIG_DIR/config_*.yaml; do
-        port=$(basename "$f" | sed 's/^config_//;s/\.yaml$//')
-        status=$(systemctl is-active hysteria-server@$port.service 2>/dev/null)
-        echo "端口: $port | 状态: $status"
-    done
 }
 
 generate_instance_auto() {
@@ -353,7 +321,7 @@ generate_instance_auto() {
         echo -e "${RED}无效端口，请重新输入${NC}"
     done
 
-    if is_port_in_use "$http_port" || [ -f "$CONFIG_DIR/config_${http_port}.yaml" ]; then
+    if is_port_in_use "$http_port" || ls $CONFIG_DIR/config_*_${http_port}.yaml 1>/dev/null 2>&1; then
         echo -e "${RED}端口 $http_port 已被占用或已存在实例，请换一个端口。${NC}"
         return
     fi
@@ -377,7 +345,6 @@ generate_instance_auto() {
 
     read -p "是否为该实例添加代理出口？(y/n): " add_proxy
 
-    local proxy_config=""
     if [[ "$add_proxy" == "y" ]]; then
         read -p "请输入代理信息（格式: IP:端口:用户名:密码）: " proxy_raw
         IFS=':' read -r proxy_ip proxy_port proxy_user proxy_pass <<< "$proxy_raw"
@@ -392,9 +359,15 @@ outbounds:
 acl:
   inline:
     - my_proxy(all)"
+        config_file="$CONFIG_DIR/config_${proxy_ip}_${http_port}.yaml"
+        client_cfg="/root/${proxy_ip}_${http_port}.json"
+    else
+        proxy_ip="no_proxy"
+        proxy_config=""
+        config_file="$CONFIG_DIR/config_${proxy_ip}_${http_port}.yaml"
+        client_cfg="/root/${proxy_ip}_${http_port}.json"
     fi
 
-    local config_file="$CONFIG_DIR/config_${http_port}.yaml"
     cat >"$config_file" <<EOF
 listen: :$http_port
 
@@ -426,7 +399,6 @@ EOF
     create_systemd_unit "$http_port" "$config_file"
     systemctl restart "hysteria-server@${http_port}.service"
 
-    local client_cfg="/root/${domain}_${http_port}.json"
     cat >"$client_cfg" <<EOF
 {
     "server": "$domain:$http_port",
