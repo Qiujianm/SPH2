@@ -68,7 +68,7 @@ while true; do
     
     case $choice in
         1) bash ./.sh install ;;
-        2) bash ./.sh manage ;;
+        2) bash ./server.sh manage ;;
         3) bash ./client.sh ;;
         4) bash ./config.sh optimize ;;
         5) bash ./config.sh update ;;
