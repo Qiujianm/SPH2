@@ -466,7 +466,6 @@ main_menu() {
 }
 
 main_menu
-
 case "$1" in
     "install")
         generate_server_config
