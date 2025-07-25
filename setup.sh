@@ -439,6 +439,7 @@ install_base() {
 install_hysteria() {
     print_status "info" "开始安装Hysteria..."
     local urls=(
+        "https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64"
         "https://gh.ddlc.top/https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64"
         "https://hub.gitmirror.com/https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64"
     )
@@ -451,6 +452,11 @@ install_hysteria() {
             print_status "warn" "下载失败: $url"
         fi
     done
+    # fallback 脚本可选
+    if curl -fsSL https://get.hy2.dev/ | bash; then
+        print_status "info" "Hysteria安装成功"
+        return 0
+    fi
     print_status "error" "Hysteria安装失败"
     return 1
 }
