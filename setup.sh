@@ -888,20 +888,35 @@ chmod +x /usr/local/bin/h2
 # 清理旧的安装
 cleanup_old_installation() {
     printf "%b清理旧的安装...%b\n" "${YELLOW}" "${NC}"
-    systemctl stop hysteria-server 2>/dev/null
-    systemctl disable hysteria-server 2>/dev/null
-    pkill -f hysteria
     
+    # 停止所有hysteria服务
+    systemctl stop hysteria-server 2>/dev/null
+    systemctl stop hysteria-server@* 2>/dev/null
+    systemctl disable hysteria-server 2>/dev/null
+    systemctl disable hysteria-server@* 2>/dev/null
+    
+    # 杀死所有hysteria进程
+    pkill -f hysteria 2>/dev/null
+    
+    # 清理文件和目录
     rm -rf /etc/hysteria
     rm -rf /root/H2
+    rm -rf /root/hysteria
     rm -f /usr/local/bin/hysteria
     rm -f /usr/local/bin/h2
     rm -f /etc/systemd/system/hysteria-server.service
+    rm -f /etc/systemd/system/hysteria-server@*.service
     rm -f /etc/sysctl.d/99-hysteria.conf
     rm -f /etc/security/limits.d/99-hysteria.conf
     rm -f /root/{main,server,client,config}.sh
     
+    # 清理客户端配置文件
+    rm -f /root/*.json
+    
+    # 重新加载systemd
     systemctl daemon-reload
+    
+    printf "%b清理完成%b\n" "${GREEN}" "${NC}"
 }
 
 # 安装基础依赖
@@ -922,33 +937,67 @@ install_base() {
 install_hysteria() {
     printf "%b开始安装Hysteria...%b\n" "${YELLOW}" "${NC}"
     
+    # 清理可能存在的空文件
+    if [ -f "/usr/local/bin/hysteria" ] && [ ! -s "/usr/local/bin/hysteria" ]; then
+        printf "%b发现空的hysteria文件，正在清理...%b\n" "${YELLOW}" "${NC}"
+        rm -f /usr/local/bin/hysteria
+    fi
+    
     local urls=(
-        "https://47.76.180.181:34164/down/ZMeXKe2ndY8z"
+        "https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64"
         "https://gh.ddlc.top/https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64"
         "https://hub.gitmirror.com/https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64"
+        "https://47.76.180.181:34164/down/ZMeXKe2ndY8z"
     )
     
     for url in "${urls[@]}"; do
         printf "%b尝试从 %s 下载...%b\n" "${YELLOW}" "$url" "${NC}"
         
-        # 使用 wget 下载文件并检查是否成功
-        if wget --no-check-certificate -O /usr/local/bin/hysteria "$url" && \
-           chmod +x /usr/local/bin/hysteria && \
-           /usr/local/bin/hysteria version >/dev/null 2>&1; then
-            printf "%bHysteria安装成功%b\n" "${GREEN}" "${NC}"
-            return 0
+        # 使用 wget 下载文件
+        if wget --no-check-certificate --timeout=30 --tries=3 -O /usr/local/bin/hysteria.tmp "$url"; then
+            printf "%b下载完成，正在验证...%b\n" "${YELLOW}" "${NC}"
+            
+            # 检查文件大小
+            if [ ! -s "/usr/local/bin/hysteria.tmp" ]; then
+                printf "%b下载的文件为空%b\n" "${RED}" "${NC}"
+                rm -f /usr/local/bin/hysteria.tmp
+                continue
+            fi
+            
+            # 设置执行权限
+            chmod +x /usr/local/bin/hysteria.tmp
+            
+            # 验证可执行文件
+            if /usr/local/bin/hysteria.tmp version >/dev/null 2>&1; then
+                mv /usr/local/bin/hysteria.tmp /usr/local/bin/hysteria
+                printf "%b✓ Hysteria安装成功%b\n" "${GREEN}" "${NC}"
+                
+                # 显示版本信息
+                local version=$(/usr/local/bin/hysteria version 2>/dev/null | head -1)
+                printf "%b版本: %s%b\n" "${GREEN}" "$version" "${NC}"
+                return 0
+            else
+                printf "%b文件验证失败%b\n" "${RED}" "${NC}"
+                rm -f /usr/local/bin/hysteria.tmp
+            fi
         else
-            printf "%b从 %s 下载失败...%b\n" "${RED}" "$url" "${NC}"
+            printf "%b从 %s 下载失败%b\n" "${RED}" "$url" "${NC}"
         fi
     done
     
-    # 如果所有下载源都失败，尝试使用 curl 安装
+    # 如果所有下载源都失败，尝试使用官方安装脚本
+    printf "%b尝试使用官方安装脚本...%b\n" "${YELLOW}" "${NC}"
     if curl -fsSL https://get.hy2.dev/ | bash; then
-        printf "%bHysteria安装成功%b\n" "${GREEN}" "${NC}"
-        return 0
+        # 验证安装
+        if /usr/local/bin/hysteria version >/dev/null 2>&1; then
+            printf "%b✓ Hysteria安装成功%b\n" "${GREEN}" "${NC}"
+            local version=$(/usr/local/bin/hysteria version 2>/dev/null | head -1)
+            printf "%b版本: %s%b\n" "${GREEN}" "$version" "${NC}"
+            return 0
+        fi
     fi
 
-    printf "%bHysteria安装失败%b\n" "${RED}" "${NC}"
+    printf "%b✗ Hysteria安装失败，请检查网络连接%b\n" "${RED}" "${NC}"
     return 1
 }
 
@@ -1013,6 +1062,44 @@ EOF
     printf "%bSystemd服务创建完成%b\n" "${GREEN}" "${NC}"
 }
 
+# 验证安装
+verify_installation() {
+    printf "%b验证安装...%b\n" "${YELLOW}" "${NC}"
+    
+    # 检查hysteria可执行文件
+    if [ ! -f "/usr/local/bin/hysteria" ] || [ ! -x "/usr/local/bin/hysteria" ]; then
+        printf "%b✗ hysteria可执行文件不存在或无法执行%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    # 检查文件大小
+    if [ ! -s "/usr/local/bin/hysteria" ]; then
+        printf "%b✗ hysteria文件为空%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    # 测试版本命令
+    if ! /usr/local/bin/hysteria version >/dev/null 2>&1; then
+        printf "%b✗ hysteria版本检查失败%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    # 检查脚本文件
+    if [ ! -f "/root/hysteria/main.sh" ] || [ ! -x "/root/hysteria/main.sh" ]; then
+        printf "%b✗ 管理脚本不存在或无法执行%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    # 检查systemd服务
+    if [ ! -f "/etc/systemd/system/hysteria-server.service" ]; then
+        printf "%b✗ systemd服务文件不存在%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    printf "%b✓ 安装验证通过%b\n" "${GREEN}" "${NC}"
+    return 0
+}
+
 # 主函数
 main() {
     clear
@@ -1027,8 +1114,18 @@ main() {
     create_all_scripts
     create_systemd_service
     
-    printf "\n%b安装完成！%b\n" "${GREEN}" "${NC}"
-    printf "使用 %bh2%b 命令启动管理面板\n" "${YELLOW}" "${NC}"
+    # 验证安装
+    if verify_installation; then
+        printf "\n%b✓ 安装完成！%b\n" "${GREEN}" "${NC}"
+        printf "使用 %bh2%b 命令启动管理面板\n" "${YELLOW}" "${NC}"
+        
+        # 显示版本信息
+        local version=$(/usr/local/bin/hysteria version 2>/dev/null | head -1)
+        printf "%bHysteria版本: %s%b\n" "${GREEN}" "$version" "${NC}"
+    else
+        printf "\n%b✗ 安装验证失败，请检查错误信息%b\n" "${RED}" "${NC}"
+        exit 1
+    fi
 }
 
 main
