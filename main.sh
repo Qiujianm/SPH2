@@ -29,13 +29,16 @@ while true; do
     }
     
     case $choice in
-        1) bash ./server.sh install ;;
-        2) bash ./server.sh manage ;;
+        1) bash ./config.sh install ;;
+        2) bash ./server.sh ;;
         3) bash ./client.sh ;;
         4) bash ./config.sh optimize ;;
         5) bash ./config.sh update ;;
         6)
-            systemctl status hysteria-server
+            echo -e "${GREEN}=== 服务端状态 ===${NC}"
+            systemctl status hysteria-server@* 2>/dev/null || echo "未找到服务端实例"
+            echo -e "\n${GREEN}=== 客户端状态 ===${NC}"
+            systemctl status hysteriaclient@* 2>/dev/null || echo "未找到客户端实例"
             read -t 30 -n 1 -s -r -p "按任意键继续..."
             ;;
         7) bash ./config.sh uninstall ;;
