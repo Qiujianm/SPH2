@@ -956,6 +956,43 @@ install_hysteria() {
 create_systemd_service() {
     printf "%b创建systemd服务...%b\n" "${YELLOW}" "${NC}"
     
+    # 创建配置目录
+    mkdir -p /etc/hysteria
+    
+    # 创建默认配置文件
+    cat > /etc/hysteria/config.yaml << EOF
+listen: :8443
+
+tls:
+  cert: /etc/hysteria/server.crt
+  key: /etc/hysteria/server.key
+
+auth:
+  type: password
+  password: $(openssl rand -base64 16)
+
+masquerade:
+  proxy:
+    url: https://www.bing.com
+    rewriteHost: true
+
+quic:
+  initStreamReceiveWindow: 26843545
+  maxStreamReceiveWindow: 26843545
+  initConnReceiveWindow: 67108864
+  maxConnReceiveWindow: 67108864
+
+bandwidth:
+  up: 185 mbps
+  down: 185 mbps
+EOF
+
+    # 生成默认证书
+    openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 365 \
+        -keyout /etc/hysteria/server.key -out /etc/hysteria/server.crt \
+        -subj "/CN=localhost" 2>/dev/null
+
+    # 创建systemd服务文件
     cat > /etc/systemd/system/hysteria-server.service << EOF
 [Unit]
 Description=Hysteria Server
