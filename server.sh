@@ -12,19 +12,38 @@ SYSTEMD_DIR="/etc/systemd/system"
 CONFIG_DIR="/etc/hysteria"
 
 check_env() {
+    echo -e "${YELLOW}检查环境依赖...${NC}"
+    
     if ! command -v openssl >/dev/null 2>&1; then
-        echo "请先安装 openssl"
+        echo -e "${RED}错误: 请先安装 openssl${NC}"
         exit 1
     fi
+    echo -e "${GREEN}✓ openssl 已安装${NC}"
+    
     if ! command -v curl >/dev/null 2>&1; then
-        echo "请先安装 curl"
+        echo -e "${RED}错误: 请先安装 curl${NC}"
         exit 1
     fi
+    echo -e "${GREEN}✓ curl 已安装${NC}"
+    
     if [ ! -f "$HYSTERIA_BIN" ]; then
-        echo "请先安装 hysteria"
+        echo -e "${RED}错误: 请先安装 hysteria${NC}"
         exit 1
     fi
+    echo -e "${GREEN}✓ hysteria 已安装${NC}"
+    
+    # 检查systemd是否可用
+    if ! command -v systemctl >/dev/null 2>&1; then
+        echo -e "${RED}错误: systemd 不可用${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ systemd 可用${NC}"
+    
+    # 创建配置目录
     mkdir -p "$CONFIG_DIR"
+    echo -e "${GREEN}✓ 配置目录已创建${NC}"
+    
+    echo -e "${GREEN}环境检查完成${NC}"
 }
 
 gen_cert() {
@@ -42,20 +61,34 @@ create_systemd_unit() {
     local port=$1
     local config_file=$2
     local unit_file="${SYSTEMD_DIR}/hysteria-server@${port}.service"
+    
+    # 创建systemd服务文件
     cat >"$unit_file" <<EOF
 [Unit]
 Description=Hysteria2 Server Instance on port $port
 After=network.target
 
 [Service]
+Type=simple
 ExecStart=$HYSTERIA_BIN server -c $config_file
-Restart=on-failure
+Restart=always
+RestartSec=3
+User=root
 
 [Install]
 WantedBy=multi-user.target
 EOF
+    
+    # 重新加载systemd配置
     systemctl daemon-reload
-    systemctl enable "hysteria-server@${port}.service" >/dev/null 2>&1
+    
+    # 启用服务
+    if systemctl enable "hysteria-server@${port}.service" >/dev/null 2>&1; then
+        echo -e "${GREEN}服务 hysteria-server@${port}.service 已启用${NC}"
+    else
+        echo -e "${RED}启用服务 hysteria-server@${port}.service 失败${NC}"
+        return 1
+    fi
 }
 
 is_port_in_use() {
@@ -139,8 +172,18 @@ acl:
     - my_proxy(all)
 EOF
 
-        create_systemd_unit "$http_port" "$config_file"
-        systemctl restart "hysteria-server@${http_port}.service"
+        if create_systemd_unit "$http_port" "$config_file"; then
+            echo -e "${GREEN}正在启动服务...${NC}"
+            if systemctl start "hysteria-server@${http_port}.service"; then
+                echo -e "${GREEN}服务启动成功${NC}"
+            else
+                echo -e "${RED}服务启动失败，请检查日志${NC}"
+                systemctl status "hysteria-server@${http_port}.service" --no-pager
+            fi
+        else
+            echo -e "${RED}创建系统服务失败${NC}"
+            continue
+        fi
 
         local client_cfg="/root/${domain}_${http_port}.json"
         cat >"$client_cfg" <<EOF
@@ -332,8 +375,18 @@ bandwidth:
 $proxy_config
 EOF
 
-    create_systemd_unit "$http_port" "$config_file"
-    systemctl restart "hysteria-server@${http_port}.service"
+    if create_systemd_unit "$http_port" "$config_file"; then
+        echo -e "${GREEN}正在启动服务...${NC}"
+        if systemctl start "hysteria-server@${http_port}.service"; then
+            echo -e "${GREEN}服务启动成功${NC}"
+        else
+            echo -e "${RED}服务启动失败，请检查日志${NC}"
+            systemctl status "hysteria-server@${http_port}.service" --no-pager
+        fi
+    else
+        echo -e "${RED}创建系统服务失败${NC}"
+        return 1
+    fi
 
     local client_cfg="/root/${domain}_${http_port}.json"
     cat >"$client_cfg" <<EOF
@@ -402,16 +455,5 @@ main_menu() {
     done
 }
 
+# 直接调用主菜单
 main_menu
-case "$1" in
-    "install")
-        generate_server_config
-        ;;
-    "manage")
-        server_menu
-        ;;
-    *)
-        echo "用法: $0 {install|manage}"
-        exit 1
-        ;;
-esac
