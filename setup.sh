@@ -45,45 +45,55 @@ NC='\033[0m'
 VERSION="2025-02-19"
 AUTHOR="Qiujianm"
 
-while true; do
-    clear
-    printf "%b════════ Hysteria 管理脚本 ════════%b\n" "${GREEN}" "${NC}"
-    printf "%b作者: ${AUTHOR}%b\n" "${GREEN}" "${NC}"
-    printf "%b版本: ${VERSION}%b\n" "${GREEN}" "${NC}"
-    printf "%b====================================%b\n" "${GREEN}" "${NC}"
-    echo "1. 安装模式"
-    echo "2. 服务端管理"
-    echo "3. 客户端管理"
-    echo "4. 系统优化"
-    echo "5. 检查更新"
-    echo "6. 运行状态"
-    echo "7. 完全卸载"
-    echo "0. 退出脚本"
-    printf "%b====================================%b\n" "${GREEN}" "${NC}"
-    
-    read -t 60 -p "请选择 [0-7]: " choice || {
-        printf "\n%b操作超时，退出脚本%b\n" "${YELLOW}" "${NC}"
-        exit 1
-    }
-    
-    case $choice in
-        1) bash ./.sh install ;;
-        2) bash ./server.sh manage ;;
-        3) bash ./client.sh ;;
-        4) bash ./config.sh optimize ;;
-        5) bash ./config.sh update ;;
-        6)
-            systemctl status hysteria-
-            read -t 30 -n 1 -s -r -p "按任意键继续..."
-            ;;
-        7) bash ./config.sh uninstall ;;
-        0) exit 0 ;;
-        *)
-            printf "%b无效选择%b\n" "${RED}" "${NC}"
-            sleep 1
-            ;;
-    esac
-done
+# 直接调用主菜单
+main_menu() {
+    while true; do
+        clear
+        printf "%b════════ Hysteria 管理脚本 ════════%b\n" "${GREEN}" "${NC}"
+        printf "%b作者: ${AUTHOR}%b\n" "${GREEN}" "${NC}"
+        printf "%b版本: ${VERSION}%b\n" "${GREEN}" "${NC}"
+        printf "%b====================================%b\n" "${GREEN}" "${NC}"
+        echo "1. 安装模式"
+        echo "2. 服务端管理"
+        echo "3. 客户端管理"
+        echo "4. 系统优化"
+        echo "5. 检查更新"
+        echo "6. 运行状态"
+        echo "7. 完全卸载"
+        echo "0. 退出脚本"
+        printf "%b====================================%b\n" "${GREEN}" "${NC}"
+        
+        read -t 60 -p "请选择 [0-7]: " choice || {
+            printf "\n%b操作超时，退出脚本%b\n" "${YELLOW}" "${NC}"
+            exit 1
+        }
+        
+        case $choice in
+            1) bash ./config.sh install ;;
+            2) bash ./server.sh ;;
+            3) bash ./client.sh ;;
+            4) bash ./config.sh optimize ;;
+            5) bash ./config.sh update ;;
+            6)
+                echo -e "${YELLOW}服务端状态:${NC}"
+                systemctl status hysteria-server@* --no-pager 2>/dev/null || echo "没有运行的服务端实例"
+                echo
+                echo -e "${YELLOW}客户端状态:${NC}"
+                systemctl status hysteriaclient@* --no-pager 2>/dev/null || echo "没有运行的客户端实例"
+                read -t 30 -n 1 -s -r -p "按任意键继续..."
+                ;;
+            7) bash ./config.sh uninstall ;;
+            0) exit 0 ;;
+            *)
+                printf "%b无效选择%b\n" "${RED}" "${NC}"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# 启动主菜单
+main_menu
 MAINEOF
     chmod +x /root/hysteria/main.sh
 
@@ -91,7 +101,8 @@ MAINEOF
 cat > /root/hysteria/server.sh << 'SERVEREOF'
 #!/bin/bash
 
-set -e
+# 移除 set -e，避免在删除操作中因非关键错误而退出
+# set -e
 
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
@@ -103,19 +114,38 @@ SYSTEMD_DIR="/etc/systemd/system"
 CONFIG_DIR="/etc/hysteria"
 
 check_env() {
+    echo -e "${YELLOW}检查环境依赖...${NC}"
+    
     if ! command -v openssl >/dev/null 2>&1; then
-        echo "请先安装 openssl"
+        echo -e "${RED}错误: 请先安装 openssl${NC}"
         exit 1
     fi
+    echo -e "${GREEN}✓ openssl 已安装${NC}"
+    
     if ! command -v curl >/dev/null 2>&1; then
-        echo "请先安装 curl"
+        echo -e "${RED}错误: 请先安装 curl${NC}"
         exit 1
     fi
+    echo -e "${GREEN}✓ curl 已安装${NC}"
+    
     if [ ! -f "$HYSTERIA_BIN" ]; then
-        echo "请先安装 hysteria"
+        echo -e "${RED}错误: 请先安装 hysteria${NC}"
         exit 1
     fi
+    echo -e "${GREEN}✓ hysteria 已安装${NC}"
+    
+    # 检查systemd是否可用
+    if ! command -v systemctl >/dev/null 2>&1; then
+        echo -e "${RED}错误: systemd 不可用${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ systemd 可用${NC}"
+    
+    # 创建配置目录
     mkdir -p "$CONFIG_DIR"
+    echo -e "${GREEN}✓ 配置目录已创建${NC}"
+    
+    echo -e "${GREEN}环境检查完成${NC}"
 }
 
 gen_cert() {
@@ -133,20 +163,34 @@ create_systemd_unit() {
     local port=$1
     local config_file=$2
     local unit_file="${SYSTEMD_DIR}/hysteria-server@${port}.service"
+    
+    # 创建systemd服务文件
     cat >"$unit_file" <<EOF
 [Unit]
 Description=Hysteria2 Server Instance on port $port
 After=network.target
 
 [Service]
+Type=simple
 ExecStart=$HYSTERIA_BIN server -c $config_file
-Restart=on-failure
+Restart=always
+RestartSec=3
+User=root
 
 [Install]
 WantedBy=multi-user.target
 EOF
+    
+    # 重新加载systemd配置
     systemctl daemon-reload
-    systemctl enable "hysteria-server@${port}.service" >/dev/null 2>&1
+    
+    # 启用服务
+    if systemctl enable "hysteria-server@${port}.service" >/dev/null 2>&1; then
+        echo -e "${GREEN}服务 hysteria-server@${port}.service 已启用${NC}"
+    else
+        echo -e "${RED}启用服务 hysteria-server@${port}.service 失败${NC}"
+        return 1
+    fi
 }
 
 is_port_in_use() {
@@ -230,8 +274,16 @@ acl:
     - my_proxy(all)
 EOF
 
-        create_systemd_unit "$http_port" "$config_file"
-        systemctl restart "hysteria-server@${http_port}.service"
+        if create_systemd_unit "$http_port" "$config_file"; then
+            if systemctl start "hysteria-server@${http_port}.service"; then
+                echo -e "${GREEN}✓ 服务 hysteria-server@${http_port}.service 启动成功${NC}"
+            else
+                echo -e "${RED}✗ 服务 hysteria-server@${http_port}.service 启动失败${NC}"
+                systemctl status "hysteria-server@${http_port}.service" --no-pager
+            fi
+        else
+            echo -e "${RED}✗ 创建服务 hysteria-server@${http_port}.service 失败${NC}"
+        fi
 
         local client_cfg="/root/${domain}_${http_port}.json"
         cat >"$client_cfg" <<EOF
@@ -273,76 +325,376 @@ EOF
 
 list_instances_and_delete() {
     echo -e "${GREEN}当前已部署的实例:${NC}"
-    ls $CONFIG_DIR/config_*.yaml 2>/dev/null | while read -r config; do
-        port=$(basename "$config" | sed 's/^config_//;s/\.yaml$//')
-        status=$(systemctl is-active hysteria-server@"$port".service 2>/dev/null)
-        echo "端口: $port | 配置: $config | 状态: $status"
-    done
-    echo
-    read -p "要删除请输入端口号，输入 all 删除所有，直接回车仅查看: " port
-    if [[ "$port" == "all" ]]; then
-        for f in $CONFIG_DIR/config_*.yaml; do
-            p=$(basename "$f" | sed 's/^config_//;s/\.yaml$//')
-            delete_instance "$p"
-        done
-        echo -e "${GREEN}所有实例已删除。${NC}"
-    elif [[ -n "$port" ]]; then
-        delete_instance "$port"
+    
+    # 检查是否有配置文件
+    if ! ls $CONFIG_DIR/config_*.yaml 2>/dev/null | grep -q .; then
+        echo -e "${YELLOW}当前没有已部署的实例${NC}"
+        echo
+        read -p "按回车键返回..."
+        return
     fi
+    
+    # 使用进程替换避免子shell问题
+    while IFS= read -r config; do
+        port=$(basename "$config" | sed 's/^config_//;s/\.yaml$//')
+        status=$(systemctl is-active hysteria-server@"$port".service 2>/dev/null || echo "inactive")
+        echo "端口: $port | 配置: $config | 状态: $status"
+    done < <(ls $CONFIG_DIR/config_*.yaml 2>/dev/null)
+    
+    echo
+    echo -e "${YELLOW}删除选项:${NC}"
+    echo "1. 输入单个端口号 (如: 56000)"
+    echo "2. 输入端口范围 (如: 56000-56005)"
+    echo "3. 输入 'all' 删除所有实例"
+    echo "4. 直接回车仅查看"
+    read -p "请选择删除方式: " port
+    
+    if [[ "$port" == "all" ]]; then
+        echo -e "${YELLOW}确认删除所有实例？(y/n): ${NC}"
+        read -p "" confirm
+        if [[ "$confirm" == [yY] ]]; then
+            deleted_count=0
+            while IFS= read -r f; do
+                p=$(basename "$f" | sed 's/^config_//;s/\.yaml$//')
+                if delete_instance "$p"; then
+                    ((deleted_count++))
+                fi
+            done < <(ls $CONFIG_DIR/config_*.yaml 2>/dev/null)
+            echo -e "${GREEN}已删除 $deleted_count 个实例${NC}"
+        else
+            echo -e "${YELLOW}取消删除操作${NC}"
+        fi
+    elif [[ -n "$port" ]]; then
+        # 检查是否为端口范围 (格式: start-end)
+        if [[ "$port" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+            start_port=${BASH_REMATCH[1]}
+            end_port=${BASH_REMATCH[2]}
+            
+            # 验证端口范围
+            if [ "$start_port" -gt "$end_port" ]; then
+                echo -e "${RED}端口范围错误：起始端口不能大于结束端口${NC}"
+            else
+                echo -e "${YELLOW}确认删除端口范围 $start_port-$end_port 的所有实例？(y/n): ${NC}"
+                read -p "" confirm
+                if [[ "$confirm" == [yY] ]]; then
+                    deleted_count=0
+                    ports_to_delete=()
+                    
+                    # 先收集要删除的端口
+                    while IFS= read -r f; do
+                        p=$(basename "$f" | sed 's/^config_//;s/\.yaml$//')
+                        if [ "$p" -ge "$start_port" ] && [ "$p" -le "$end_port" ]; then
+                            ports_to_delete+=("$p")
+                        fi
+                    done < <(ls $CONFIG_DIR/config_*.yaml 2>/dev/null)
+                    
+                    echo -e "${YELLOW}找到 ${#ports_to_delete[@]} 个实例在指定范围内${NC}"
+                    
+                    # 执行删除操作
+                    for p in "${ports_to_delete[@]}"; do
+                        echo -e "${YELLOW}正在删除端口 $p...${NC}"
+                        if delete_instance "$p"; then
+                            ((deleted_count++))
+                        fi
+                    done
+                    
+                    # 重新加载systemd配置
+                    systemctl daemon-reload
+                    
+                    if [ $deleted_count -eq 0 ]; then
+                        echo -e "${YELLOW}在指定端口范围内没有找到实例${NC}"
+                    else
+                        echo -e "${GREEN}已删除 $deleted_count 个实例${NC}"
+                    fi
+                else
+                    echo -e "${YELLOW}取消删除操作${NC}"
+                fi
+            fi
+        else
+            # 单个端口删除
+            delete_instance "$port"
+        fi
+    fi
+    
+    echo
+    read -p "按回车键返回..."
 }
 
 delete_instance() {
     port="$1"
     config_file="$CONFIG_DIR/config_${port}.yaml"
     unit_file="${SYSTEMD_DIR}/hysteria-server@${port}.service"
+    
     if [ -f "$config_file" ]; then
-        systemctl stop "hysteria-server@${port}.service" >/dev/null 2>&1
-        systemctl disable "hysteria-server@${port}.service" >/dev/null 2>&1
-        rm -f "$config_file" "$unit_file"
-        systemctl daemon-reload
-        echo "实例 $port 已删除。"
+        # 停止服务（忽略错误）
+        systemctl stop "hysteria-server@${port}.service" >/dev/null 2>&1 || true
+        # 禁用服务（忽略错误）
+        systemctl disable "hysteria-server@${port}.service" >/dev/null 2>&1 || true
+        # 删除配置文件和服务文件（忽略错误）
+        rm -f "$config_file" "$unit_file" 2>/dev/null || true
+        echo -e "${GREEN}实例 $port 已删除。${NC}"
+        return 0
     else
-        echo -e "${RED}未找到端口 $port 的配置。${NC}"
+        echo -e "${YELLOW}端口 $port 的配置文件不存在，跳过删除。${NC}"
+        return 1
     fi
 }
 
 manage_single_instance() {
     read -p "请输入实例端口号: " port
+    
+    # 验证端口号
+    if [[ ! "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+        echo -e "${RED}无效的端口号${NC}"
+        return
+    fi
+    
+    # 检查配置文件是否存在
+    if [ ! -f "$CONFIG_DIR/config_${port}.yaml" ]; then
+        echo -e "${RED}端口 $port 的配置文件不存在${NC}"
+        return
+    fi
+    
     echo "1. 启动  2. 停止  3. 重启"
     read -p "请选择操作[1-3]: " act
     case "$act" in
-        1) systemctl start hysteria-server@$port.service ;;
-        2) systemctl stop hysteria-server@$port.service ;;
-        3) systemctl restart hysteria-server@$port.service ;;
-        *) echo "无效选择" ;;
+        1) 
+            if systemctl start hysteria-server@$port.service >/dev/null 2>&1; then
+                echo -e "${GREEN}✓ 已启动端口 $port${NC}"
+            else
+                echo -e "${RED}✗ 启动端口 $port 失败${NC}"
+                systemctl status hysteria-server@$port.service --no-pager
+            fi
+            ;;
+        2) 
+            if systemctl stop hysteria-server@$port.service >/dev/null 2>&1; then
+                echo -e "${YELLOW}✓ 已停止端口 $port${NC}"
+            else
+                echo -e "${RED}✗ 停止端口 $port 失败${NC}"
+            fi
+            ;;
+        3) 
+            if systemctl restart hysteria-server@$port.service >/dev/null 2>&1; then
+                echo -e "${GREEN}✓ 已重启端口 $port${NC}"
+            else
+                echo -e "${RED}✗ 重启端口 $port 失败${NC}"
+                systemctl status hysteria-server@$port.service --no-pager
+            fi
+            ;;
+        *) echo -e "${RED}无效选择${NC}" ;;
     esac
 }
 
 status_single_instance() {
     read -p "请输入实例端口号: " port
-    systemctl status hysteria-server@$port.service
+    
+    # 验证端口号
+    if [[ ! "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+        echo -e "${RED}无效的端口号${NC}"
+        return
+    fi
+    
+    # 检查配置文件是否存在
+    if [ ! -f "$CONFIG_DIR/config_${port}.yaml" ]; then
+        echo -e "${RED}端口 $port 的配置文件不存在${NC}"
+        return
+    fi
+    
+    systemctl status hysteria-server@$port.service --no-pager
 }
 
 manage_all_instances() {
+    echo -e "${GREEN}批量管理实例:${NC}"
+    echo "1. 管理所有实例"
+    echo "2. 管理指定端口范围的实例"
+    read -p "请选择管理方式[1-2]: " manage_type
+    
+    case "$manage_type" in
+        1)
+            manage_all_instances_internal
+            ;;
+        2)
+            manage_port_range_instances
+            ;;
+        *)
+            echo -e "${RED}无效选择${NC}"
+            return
+            ;;
+    esac
+}
+
+manage_all_instances_internal() {
     echo "1. 启动全部  2. 停止全部  3. 重启全部"
     read -p "请选择操作[1-3]: " act
-    for f in $CONFIG_DIR/config_*.yaml; do
+    
+    # 检查是否有配置文件
+    if ! ls $CONFIG_DIR/config_*.yaml 2>/dev/null | grep -q .; then
+        echo -e "${YELLOW}当前没有已部署的实例${NC}"
+        return
+    fi
+    
+    # 使用进程替换避免子shell问题
+    while IFS= read -r f; do
         port=$(basename "$f" | sed 's/^config_//;s/\.yaml$//')
         case "$act" in
-            1) systemctl start hysteria-server@$port.service ;;
-            2) systemctl stop hysteria-server@$port.service ;;
-            3) systemctl restart hysteria-server@$port.service ;;
-            *) echo "无效选择" ;;
+            1) 
+                if systemctl start hysteria-server@$port.service >/dev/null 2>&1; then
+                    echo -e "${GREEN}✓ 已启动端口 $port${NC}"
+                else
+                    echo -e "${RED}✗ 启动端口 $port 失败${NC}"
+                fi
+                ;;
+            2) 
+                if systemctl stop hysteria-server@$port.service >/dev/null 2>&1; then
+                    echo -e "${YELLOW}✓ 已停止端口 $port${NC}"
+                else
+                    echo -e "${RED}✗ 停止端口 $port 失败${NC}"
+                fi
+                ;;
+            3) 
+                if systemctl restart hysteria-server@$port.service >/dev/null 2>&1; then
+                    echo -e "${GREEN}✓ 已重启端口 $port${NC}"
+                else
+                    echo -e "${RED}✗ 重启端口 $port 失败${NC}"
+                fi
+                ;;
+            *) echo -e "${RED}无效选择${NC}" ;;
         esac
-    done
+    done < <(ls $CONFIG_DIR/config_*.yaml 2>/dev/null)
+}
+
+manage_port_range_instances() {
+    echo -e "${GREEN}管理指定端口范围的实例:${NC}"
+    read -p "请输入端口范围 (格式: 56000-56005): " port_range
+    
+    # 验证端口范围格式
+    if [[ ! "$port_range" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+        echo -e "${RED}端口范围格式错误，请使用 起始端口-结束端口 格式${NC}"
+        return
+    fi
+    
+    start_port=${BASH_REMATCH[1]}
+    end_port=${BASH_REMATCH[2]}
+    
+    # 验证端口范围
+    if [ "$start_port" -gt "$end_port" ]; then
+        echo -e "${RED}端口范围错误：起始端口不能大于结束端口${NC}"
+        return
+    fi
+    
+    echo "1. 启动  2. 停止  3. 重启"
+    read -p "请选择操作[1-3]: " act
+    
+    # 检查是否有配置文件
+    if ! ls $CONFIG_DIR/config_*.yaml 2>/dev/null | grep -q .; then
+        echo -e "${YELLOW}当前没有已部署的实例${NC}"
+        return
+    fi
+    
+    # 使用进程替换避免子shell问题
+    while IFS= read -r f; do
+        port=$(basename "$f" | sed 's/^config_//;s/\.yaml$//')
+        if [ "$port" -ge "$start_port" ] && [ "$port" -le "$end_port" ]; then
+            case "$act" in
+                1) 
+                    if systemctl start hysteria-server@$port.service >/dev/null 2>&1; then
+                        echo -e "${GREEN}✓ 已启动端口 $port${NC}"
+                    else
+                        echo -e "${RED}✗ 启动端口 $port 失败${NC}"
+                    fi
+                    ;;
+                2) 
+                    if systemctl stop hysteria-server@$port.service >/dev/null 2>&1; then
+                        echo -e "${YELLOW}✓ 已停止端口 $port${NC}"
+                    else
+                        echo -e "${RED}✗ 停止端口 $port 失败${NC}"
+                    fi
+                    ;;
+                3) 
+                    if systemctl restart hysteria-server@$port.service >/dev/null 2>&1; then
+                        echo -e "${GREEN}✓ 已重启端口 $port${NC}"
+                    else
+                        echo -e "${RED}✗ 重启端口 $port 失败${NC}"
+                    fi
+                    ;;
+                *) echo -e "${RED}无效选择${NC}" ;;
+            esac
+        fi
+    done < <(ls $CONFIG_DIR/config_*.yaml 2>/dev/null)
 }
 
 status_all_instances() {
-    for f in $CONFIG_DIR/config_*.yaml; do
+    echo -e "${GREEN}查看实例状态:${NC}"
+    echo "1. 查看所有实例状态"
+    echo "2. 查看指定端口范围的实例状态"
+    read -p "请选择查看方式[1-2]: " view_type
+    
+    case "$view_type" in
+        1)
+            status_all_instances_internal
+            ;;
+        2)
+            status_port_range_instances
+            ;;
+        *)
+            echo -e "${RED}无效选择${NC}"
+            return
+            ;;
+    esac
+}
+
+status_all_instances_internal() {
+    echo -e "${YELLOW}所有实例状态:${NC}"
+    
+    # 检查是否有配置文件
+    if ! ls $CONFIG_DIR/config_*.yaml 2>/dev/null | grep -q .; then
+        echo -e "${YELLOW}当前没有已部署的实例${NC}"
+        return
+    fi
+    
+    # 使用进程替换避免子shell问题
+    while IFS= read -r f; do
         port=$(basename "$f" | sed 's/^config_//;s/\.yaml$//')
-        status=$(systemctl is-active hysteria-server@$port.service 2>/dev/null)
+        status=$(systemctl is-active hysteria-server@$port.service 2>/dev/null || echo "inactive")
         echo "端口: $port | 状态: $status"
-    done
+    done < <(ls $CONFIG_DIR/config_*.yaml 2>/dev/null)
+}
+
+status_port_range_instances() {
+    echo -e "${GREEN}查看指定端口范围的实例状态:${NC}"
+    read -p "请输入端口范围 (格式: 56000-56005): " port_range
+    
+    # 验证端口范围格式
+    if [[ ! "$port_range" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+        echo -e "${RED}端口范围格式错误，请使用 起始端口-结束端口 格式${NC}"
+        return
+    fi
+    
+    start_port=${BASH_REMATCH[1]}
+    end_port=${BASH_REMATCH[2]}
+    
+    # 验证端口范围
+    if [ "$start_port" -gt "$end_port" ]; then
+        echo -e "${RED}端口范围错误：起始端口不能大于结束端口${NC}"
+        return
+    fi
+    
+    echo -e "${YELLOW}端口范围 $start_port-$end_port 的实例状态:${NC}"
+    
+    # 检查是否有配置文件
+    if ! ls $CONFIG_DIR/config_*.yaml 2>/dev/null | grep -q .; then
+        echo -e "${YELLOW}当前没有已部署的实例${NC}"
+        return
+    fi
+    
+    # 使用进程替换避免子shell问题
+    while IFS= read -r f; do
+        port=$(basename "$f" | sed 's/^config_//;s/\.yaml$//')
+        if [ "$port" -ge "$start_port" ] && [ "$port" -le "$end_port" ]; then
+            status=$(systemctl is-active hysteria-server@$port.service 2>/dev/null || echo "inactive")
+            echo "端口: $port | 状态: $status"
+        fi
+    done < <(ls $CONFIG_DIR/config_*.yaml 2>/dev/null)
 }
 
 generate_instance_auto() {
@@ -552,13 +904,24 @@ fi
 # 自动注册并启动所有配置到 systemd
 auto_systemd_enable_all() {
     echo -e "${YELLOW}正在自动写入并启动/root/*.json配置到 systemd ...${NC}"
+    
+    # 检查是否有配置文件
+    if ! ls /root/*.json 2>/dev/null | grep -q .; then
+        echo -e "${YELLOW}当前没有客户端配置文件${NC}"
+        return
+    fi
+    
     shopt -s nullglob
     found=0
     for cfg in /root/*.json; do
         [ -f "$cfg" ] || continue
         name=$(basename "${cfg%.json}")
-        systemctl enable --now hysteriaclient@"$name" &>/dev/null
-        echo -e "${GREEN}已注册并启动/守护实例：$name${NC}"
+        if systemctl enable --now hysteriaclient@"$name" &>/dev/null; then
+            echo -e "${GREEN}✓ 已注册并启动/守护实例：$name${NC}"
+        else
+            echo -e "${RED}✗ 注册实例 $name 失败${NC}"
+            systemctl status hysteriaclient@"$name" --no-pager
+        fi
         found=1
     done
     if [ $found -eq 0 ]; then
@@ -569,14 +932,25 @@ auto_systemd_enable_all() {
 # 启动剩余未启动的实例
 start_remaining_instances() {
     echo -e "${YELLOW}正在启动剩余未启动的实例...${NC}"
+    
+    # 检查是否有配置文件
+    if ! ls /root/*.json 2>/dev/null | grep -q .; then
+        echo -e "${YELLOW}当前没有客户端配置文件${NC}"
+        return
+    fi
+    
     shopt -s nullglob
     found=0
     for cfg in /root/*.json; do
         [ -f "$cfg" ] || continue
         name=$(basename "${cfg%.json}")
         if ! systemctl is-active --quiet hysteriaclient@"$name"; then
-            systemctl enable --now hysteriaclient@"$name" &>/dev/null
-            echo -e "${GREEN}已启动新增实例：$name${NC}"
+            if systemctl enable --now hysteriaclient@"$name" &>/dev/null; then
+                echo -e "${GREEN}✓ 已启动新增实例：$name${NC}"
+            else
+                echo -e "${RED}✗ 启动实例 $name 失败${NC}"
+                systemctl status hysteriaclient@"$name" --no-pager
+            fi
             found=1
         fi
     done
@@ -587,59 +961,445 @@ start_remaining_instances() {
 
 # 停止全部客户端
 stop_all() {
+    echo -e "${GREEN}批量停止客户端:${NC}"
+    echo "1. 停止所有客户端"
+    echo "2. 停止指定端口范围的客户端"
+    read -p "请选择停止方式[1-2]: " stop_type
+    
+    case "$stop_type" in
+        1)
+            stop_all_clients_internal
+            ;;
+        2)
+            stop_port_range_clients
+            ;;
+        *)
+            echo -e "${RED}无效选择${NC}"
+            return
+            ;;
+    esac
+}
+
+stop_all_clients_internal() {
+    echo -e "${YELLOW}正在停止所有客户端...${NC}"
+    
+    # 检查是否有配置文件
+    if ! ls /root/*.json 2>/dev/null | grep -q .; then
+        echo -e "${YELLOW}当前没有客户端配置文件${NC}"
+        return
+    fi
+    
+    shopt -s nullglob
+    stopped_count=0
+    for cfg in /root/*.json; do
+        [ -f "$cfg" ] || continue
+        name=$(basename "${cfg%.json}")
+        if systemctl stop hysteriaclient@"$name" &>/dev/null; then
+            echo -e "${GREEN}✓ 已停止 $name${NC}"
+            ((stopped_count++))
+        else
+            echo -e "${RED}✗ 停止 $name 失败${NC}"
+        fi
+    done
+    
+    if [ $stopped_count -gt 0 ]; then
+        echo -e "${GREEN}成功停止 $stopped_count 个客户端${NC}"
+    fi
+}
+
+stop_port_range_clients() {
+    echo -e "${GREEN}停止指定端口范围的客户端:${NC}"
+    read -p "请输入端口范围 (格式: 20000-20005): " port_range
+    
+    # 验证端口范围格式
+    if [[ ! "$port_range" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+        echo -e "${RED}端口范围格式错误，请使用 起始端口-结束端口 格式${NC}"
+        return
+    fi
+    
+    start_port=${BASH_REMATCH[1]}
+    end_port=${BASH_REMATCH[2]}
+    
+    # 验证端口范围
+    if [ "$start_port" -gt "$end_port" ]; then
+        echo -e "${RED}端口范围错误：起始端口不能大于结束端口${NC}"
+        return
+    fi
+    
+    echo -e "${YELLOW}正在停止端口范围 $start_port-$end_port 的客户端...${NC}"
+    
+    # 检查是否有配置文件
+    if ! ls /root/*.json 2>/dev/null | grep -q .; then
+        echo -e "${YELLOW}当前没有客户端配置文件${NC}"
+        return
+    fi
+    
+    stopped_count=0
     shopt -s nullglob
     for cfg in /root/*.json; do
         [ -f "$cfg" ] || continue
         name=$(basename "${cfg%.json}")
-        systemctl stop hysteriaclient@"$name" &>/dev/null
-        echo -e "${YELLOW}已停止 $name${NC}"
+        # 从配置名称中提取端口号
+        port=$(echo "$name" | grep -oE '[0-9]+$' || echo "")
+        if [[ -n "$port" && "$port" -ge "$start_port" && "$port" -le "$end_port" ]]; then
+            if systemctl stop hysteriaclient@"$name" &>/dev/null; then
+                echo -e "${GREEN}✓ 已停止 $name${NC}"
+                ((stopped_count++))
+            else
+                echo -e "${RED}✗ 停止 $name 失败${NC}"
+            fi
+        fi
     done
+    
+    if [ $stopped_count -gt 0 ]; then
+        echo -e "${GREEN}成功停止 $stopped_count 个客户端${NC}"
+    else
+        echo -e "${YELLOW}在指定端口范围内没有找到客户端${NC}"
+    fi
 }
 
 # 重启全部客户端
 restart_all() {
+    echo -e "${GREEN}批量重启客户端:${NC}"
+    echo "1. 重启所有客户端"
+    echo "2. 重启指定端口范围的客户端"
+    read -p "请选择重启方式[1-2]: " restart_type
+    
+    case "$restart_type" in
+        1)
+            restart_all_clients_internal
+            ;;
+        2)
+            restart_port_range_clients
+            ;;
+        *)
+            echo -e "${RED}无效选择${NC}"
+            return
+            ;;
+    esac
+}
+
+restart_all_clients_internal() {
+    echo -e "${YELLOW}正在重启所有客户端...${NC}"
+    
+    # 检查是否有配置文件
+    if ! ls /root/*.json 2>/dev/null | grep -q .; then
+        echo -e "${YELLOW}当前没有客户端配置文件${NC}"
+        return
+    fi
+    
+    shopt -s nullglob
+    restarted_count=0
+    for cfg in /root/*.json; do
+        [ -f "$cfg" ] || continue
+        name=$(basename "${cfg%.json}")
+        if systemctl restart hysteriaclient@"$name" &>/dev/null; then
+            echo -e "${GREEN}✓ 已重启 $name${NC}"
+            ((restarted_count++))
+        else
+            echo -e "${RED}✗ 重启 $name 失败${NC}"
+        fi
+    done
+    
+    if [ $restarted_count -gt 0 ]; then
+        echo -e "${GREEN}成功重启 $restarted_count 个客户端${NC}"
+    fi
+}
+
+restart_port_range_clients() {
+    echo -e "${GREEN}重启指定端口范围的客户端:${NC}"
+    read -p "请输入端口范围 (格式: 20000-20005): " port_range
+    
+    # 验证端口范围格式
+    if [[ ! "$port_range" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+        echo -e "${RED}端口范围格式错误，请使用 起始端口-结束端口 格式${NC}"
+        return
+    fi
+    
+    start_port=${BASH_REMATCH[1]}
+    end_port=${BASH_REMATCH[2]}
+    
+    # 验证端口范围
+    if [ "$start_port" -gt "$end_port" ]; then
+        echo -e "${RED}端口范围错误：起始端口不能大于结束端口${NC}"
+        return
+    fi
+    
+    echo -e "${YELLOW}正在重启端口范围 $start_port-$end_port 的客户端...${NC}"
+    
+    # 检查是否有配置文件
+    if ! ls /root/*.json 2>/dev/null | grep -q .; then
+        echo -e "${YELLOW}当前没有客户端配置文件${NC}"
+        return
+    fi
+    
+    restarted_count=0
     shopt -s nullglob
     for cfg in /root/*.json; do
         [ -f "$cfg" ] || continue
         name=$(basename "${cfg%.json}")
-        systemctl restart hysteriaclient@"$name" &>/dev/null
-        echo -e "${GREEN}已重启 $name${NC}"
+        # 从配置名称中提取端口号
+        port=$(echo "$name" | grep -oE '[0-9]+$' || echo "")
+        if [[ -n "$port" && "$port" -ge "$start_port" && "$port" -le "$end_port" ]]; then
+            if systemctl restart hysteriaclient@"$name" &>/dev/null; then
+                echo -e "${GREEN}✓ 已重启 $name${NC}"
+                ((restarted_count++))
+            else
+                echo -e "${RED}✗ 重启 $name 失败${NC}"
+            fi
+        fi
     done
+    
+    if [ $restarted_count -gt 0 ]; then
+        echo -e "${GREEN}成功重启 $restarted_count 个客户端${NC}"
+    else
+        echo -e "${YELLOW}在指定端口范围内没有找到客户端${NC}"
+    fi
 }
 
 # 查看所有客户端 systemd 状态
 status_all() {
-    echo -e "${YELLOW}所有客户端 systemd 状态：${NC}"
-    shopt -s nullglob
-    for cfg in /root/*.json; do
-        name=$(basename "${cfg%.json}")
-        echo -e "${GREEN}[$name]${NC}"
-        systemctl --no-pager --full status hysteriaclient@"$name" | grep -E "Active:|Loaded:" | head -n 2
-        echo "---------------------------------------"
-    done
+    echo -e "${GREEN}查看客户端状态:${NC}"
+    echo "1. 查看所有客户端状态"
+    echo "2. 查看指定端口范围的客户端状态"
+    read -p "请选择查看方式[1-2]: " view_type
+    
+    case "$view_type" in
+        1)
+            status_all_clients_internal
+            ;;
+        2)
+            status_port_range_clients
+            ;;
+        *)
+            echo -e "${RED}无效选择${NC}"
+            return
+            ;;
+    esac
 }
 
-# 删除客户端配置并禁用服务（支持单个和全部）
+status_all_clients_internal() {
+    echo -e "${YELLOW}所有客户端 systemd 状态：${NC}"
+    
+    # 检查是否有配置文件
+    if ! ls /root/*.json 2>/dev/null | grep -q .; then
+        echo -e "${YELLOW}当前没有客户端配置文件${NC}"
+        return
+    fi
+    
+    shopt -s nullglob
+    found=0
+    for cfg in /root/*.json; do
+        [ -f "$cfg" ] || continue
+        name=$(basename "${cfg%.json}")
+        found=1
+        
+        echo -e "${GREEN}[$name]${NC}"
+        
+        # 检查服务是否存在
+        if systemctl list-unit-files | grep -q "hysteriaclient@$name.service"; then
+            # 获取服务状态
+            status=$(systemctl is-active hysteriaclient@"$name" 2>/dev/null || echo "inactive")
+            loaded=$(systemctl is-enabled hysteriaclient@"$name" 2>/dev/null || echo "disabled")
+            
+            echo "  状态: $status"
+            echo "  启用: $loaded"
+            
+            # 如果服务正在运行，显示更多信息
+            if [ "$status" = "active" ]; then
+                echo "  运行时间: $(systemctl show hysteriaclient@$name --property=ActiveEnterTimestamp | cut -d= -f2)"
+            fi
+        else
+            echo "  服务未注册"
+        fi
+        
+        echo "---------------------------------------"
+    done
+    
+    if [ $found -eq 0 ]; then
+        echo -e "${YELLOW}没有找到任何客户端配置文件${NC}"
+    fi
+}
+
+status_port_range_clients() {
+    echo -e "${GREEN}查看指定端口范围的客户端状态:${NC}"
+    read -p "请输入端口范围 (格式: 20000-20005): " port_range
+    
+    # 验证端口范围格式
+    if [[ ! "$port_range" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+        echo -e "${RED}端口范围格式错误，请使用 起始端口-结束端口 格式${NC}"
+        return
+    fi
+    
+    start_port=${BASH_REMATCH[1]}
+    end_port=${BASH_REMATCH[2]}
+    
+    # 验证端口范围
+    if [ "$start_port" -gt "$end_port" ]; then
+        echo -e "${RED}端口范围错误：起始端口不能大于结束端口${NC}"
+        return
+    fi
+    
+    echo -e "${YELLOW}端口范围 $start_port-$end_port 的客户端状态：${NC}"
+    
+    # 检查是否有配置文件
+    if ! ls /root/*.json 2>/dev/null | grep -q .; then
+        echo -e "${YELLOW}当前没有客户端配置文件${NC}"
+        return
+    fi
+    
+    found_count=0
+    shopt -s nullglob
+    for cfg in /root/*.json; do
+        [ -f "$cfg" ] || continue
+        name=$(basename "${cfg%.json}")
+        # 从配置名称中提取端口号
+        port=$(echo "$name" | grep -oE '[0-9]+$' || echo "")
+        if [[ -n "$port" && "$port" -ge "$start_port" && "$port" -le "$end_port" ]]; then
+            found_count=1
+            
+            echo -e "${GREEN}[$name]${NC}"
+            
+            # 检查服务是否存在
+            if systemctl list-unit-files | grep -q "hysteriaclient@$name.service"; then
+                # 获取服务状态
+                status=$(systemctl is-active hysteriaclient@"$name" 2>/dev/null || echo "inactive")
+                loaded=$(systemctl is-enabled hysteriaclient@"$name" 2>/dev/null || echo "disabled")
+                
+                echo "  状态: $status"
+                echo "  启用: $loaded"
+                
+                # 如果服务正在运行，显示更多信息
+                if [ "$status" = "active" ]; then
+                    echo "  运行时间: $(systemctl show hysteriaclient@$name --property=ActiveEnterTimestamp | cut -d= -f2)"
+                fi
+            else
+                echo "  服务未注册"
+            fi
+            
+            echo "---------------------------------------"
+        fi
+    done
+    
+    if [ $found_count -eq 0 ]; then
+        echo -e "${YELLOW}在指定端口范围内没有找到客户端${NC}"
+    fi
+}
+
+# 删除客户端配置并禁用服务（支持单个、范围和全部）
 delete_config() {
     echo -e "${YELLOW}可用的配置文件：${NC}"
+    
+    # 检查是否有配置文件
+    if ! ls /root/*.json 2>/dev/null | grep -q .; then
+        echo -e "${YELLOW}当前没有客户端配置文件${NC}"
+        return
+    fi
+    
+    # 显示配置文件列表
     ls -l /root/*.json 2>/dev/null || echo "无配置文件"
-    read -p "请输入要删除的配置文件名称（不带.json，输入 all 删除全部）: " name
+    
+    echo
+    echo -e "${YELLOW}删除选项:${NC}"
+    echo "1. 输入单个配置名称 (如: 47.251.58.77_20000)"
+    echo "2. 输入端口范围 (如: 20000-20005)"
+    echo "3. 输入 'all' 删除所有配置"
+    echo "4. 直接回车仅查看"
+    read -p "请选择删除方式: " name
+    
     if [ "$name" == "all" ]; then
-        for cfg in /root/*.json; do
-            [ -f "$cfg" ] || continue
-            cname=$(basename "${cfg%.json}")
-            systemctl disable --now hysteriaclient@"$cname"
-            rm -f "/root/$cname.json"
-            rm -f "/var/log/hysteria-client-$cname.log"
-            echo -e "${GREEN}配置文件 $cname 已删除并禁用服务${NC}"
-        done
-    elif [ -f "/root/$name.json" ]; then
-        systemctl disable --now hysteriaclient@"$name"
-        rm -f "/root/$name.json"
-        echo -e "${GREEN}配置文件 $name 已删除并禁用服务${NC}"
-        rm -f "/var/log/hysteria-client-$name.log"
+        echo -e "${YELLOW}确认删除所有客户端配置？(y/n): ${NC}"
+        read -p "" confirm
+        if [[ "$confirm" == [yY] ]]; then
+            deleted_count=0
+            for cfg in /root/*.json; do
+                [ -f "$cfg" ] || continue
+                cname=$(basename "${cfg%.json}")
+                if delete_client_config "$cname"; then
+                    ((deleted_count++))
+                fi
+            done
+            echo -e "${GREEN}已删除 $deleted_count 个客户端配置${NC}"
+        else
+            echo -e "${YELLOW}取消删除操作${NC}"
+        fi
+    elif [[ -n "$name" ]]; then
+        # 检查是否为端口范围 (格式: start-end)
+        if [[ "$name" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+            start_port=${BASH_REMATCH[1]}
+            end_port=${BASH_REMATCH[2]}
+            
+            # 验证端口范围
+            if [ "$start_port" -gt "$end_port" ]; then
+                echo -e "${RED}端口范围错误：起始端口不能大于结束端口${NC}"
+            else
+                echo -e "${YELLOW}确认删除端口范围 $start_port-$end_port 的所有客户端配置？(y/n): ${NC}"
+                read -p "" confirm
+                if [[ "$confirm" == [yY] ]]; then
+                    deleted_count=0
+                    configs_to_delete=()
+                    
+                    # 先收集要删除的配置
+                    for cfg in /root/*.json; do
+                        [ -f "$cfg" ] || continue
+                        cname=$(basename "${cfg%.json}")
+                        # 从配置名称中提取端口号
+                        port=$(echo "$cname" | grep -oE '[0-9]+$' || echo "")
+                        if [[ -n "$port" && "$port" -ge "$start_port" && "$port" -le "$end_port" ]]; then
+                            configs_to_delete+=("$cname")
+                        fi
+                    done
+                    
+                    echo -e "${YELLOW}找到 ${#configs_to_delete[@]} 个配置在指定端口范围内${NC}"
+                    
+                    # 执行删除操作
+                    for cname in "${configs_to_delete[@]}"; do
+                        echo -e "${YELLOW}正在删除配置 $cname...${NC}"
+                        if delete_client_config "$cname"; then
+                            ((deleted_count++))
+                        fi
+                    done
+                    
+                    if [ $deleted_count -eq 0 ]; then
+                        echo -e "${YELLOW}在指定端口范围内没有找到配置${NC}"
+                    else
+                        echo -e "${GREEN}已删除 $deleted_count 个客户端配置${NC}"
+                    fi
+                else
+                    echo -e "${YELLOW}取消删除操作${NC}"
+                fi
+            fi
+        else
+            # 单个配置删除
+            if [ -f "/root/$name.json" ]; then
+                delete_client_config "$name"
+            else
+                echo -e "${RED}配置文件 $name 不存在${NC}"
+            fi
+        fi
+    fi
+    
+    echo
+    read -p "按回车键返回..."
+}
+
+# 删除单个客户端配置的辅助函数
+delete_client_config() {
+    local cname="$1"
+    local config_file="/root/$cname.json"
+    
+    if [ -f "$config_file" ]; then
+        # 停止并禁用服务（忽略错误）
+        systemctl disable --now hysteriaclient@"$cname" >/dev/null 2>&1 || true
+        # 删除配置文件（忽略错误）
+        rm -f "$config_file" 2>/dev/null || true
+        # 删除日志文件（忽略错误）
+        rm -f "/var/log/hysteria-client-$cname.log" 2>/dev/null || true
+        echo -e "${GREEN}配置文件 $cname 已删除并禁用服务${NC}"
+        return 0
     else
-        echo -e "${RED}文件不存在${NC}"
+        echo -e "${YELLOW}配置文件 $cname 不存在，跳过删除${NC}"
+        return 1
     fi
 }
 
@@ -999,6 +1759,60 @@ install_hysteria() {
 
     printf "%b✗ Hysteria安装失败，请检查网络连接%b\n" "${RED}" "${NC}"
     return 1
+}
+
+# 验证安装
+verify_installation() {
+    printf "%b验证安装...%b\n" "${YELLOW}" "${NC}"
+    
+    # 检查 hysteria 二进制文件
+    if [ ! -f "/usr/local/bin/hysteria" ]; then
+        printf "%b✗ Hysteria 二进制文件不存在%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    if [ ! -x "/usr/local/bin/hysteria" ]; then
+        printf "%b✗ Hysteria 二进制文件没有执行权限%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    # 检查文件大小
+    local size=$(stat -c%s /usr/local/bin/hysteria 2>/dev/null || echo "0")
+    if [ "$size" -lt 1000000 ]; then  # 小于1MB可能是损坏的
+        printf "%b✗ Hysteria 二进制文件可能损坏 (大小: %s bytes)%b\n" "${RED}" "$size" "${NC}"
+        return 1
+    fi
+    
+    # 检查版本命令
+    if ! /usr/local/bin/hysteria version >/dev/null 2>&1; then
+        printf "%b✗ Hysteria 版本命令执行失败%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    # 检查管理脚本
+    if [ ! -f "/root/hysteria/main.sh" ]; then
+        printf "%b✗ 主管理脚本不存在%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    if [ ! -f "/root/hysteria/server.sh" ]; then
+        printf "%b✗ 服务端管理脚本不存在%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    if [ ! -f "/root/hysteria/client.sh" ]; then
+        printf "%b✗ 客户端管理脚本不存在%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    # 检查默认服务文件
+    if [ ! -f "/etc/systemd/system/hysteria-server.service" ]; then
+        printf "%b✗ 默认服务文件不存在%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    printf "%b✓ 安装验证通过%b\n" "${GREEN}" "${NC}"
+    return 0
 }
 
 # 创建systemd服务
