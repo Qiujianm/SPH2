@@ -212,6 +212,40 @@ generate_instances_batch() {
         proxies+="$line"$'\n'
     done
 
+    # 选择双端部署模式
+    echo -e "${YELLOW}双端部署模式选择:${NC}"
+    echo "1. 双端同机（客户端和服务器在同一台机器）"
+    echo "2. 双端不同机（客户端和服务器在不同机器）"
+    read -p "请选择部署模式 [1-2]: " deploy_mode
+    
+    case "$deploy_mode" in
+        1)
+            server_address="127.0.0.1"
+            ;;
+        2)
+            server_address="$domain"
+            ;;
+        *)
+            echo -e "${RED}无效选择，默认使用双端不同机模式${NC}"
+            server_address="$domain"
+            ;;
+    esac
+    
+    # 配置客户端代理认证信息
+    echo -e "${YELLOW}客户端代理认证配置（HTTP和SOCKS5使用相同认证信息）:${NC}"
+    read -p "代理用户名（直接回车跳过）: " proxy_username
+    read -p "代理密码（直接回车跳过）: " proxy_password
+    read -p "HTTP代理认证域 [hy2-proxy]: " http_realm
+    http_realm=${http_realm:-hy2-proxy}
+    
+    # 生成代理认证配置
+    proxy_config=""
+    if [[ -n "$proxy_username" && -n "$proxy_password" ]]; then
+        proxy_config=",
+    \"username\": \"$proxy_username\",
+    \"password\": \"$proxy_password\""
+    fi
+
     read -p "请输入批量新建实例的起始端口: " start_port
     current_port="$start_port"
 
@@ -288,32 +322,40 @@ EOF
         local client_cfg="/root/${domain}_${http_port}.json"
         cat >"$client_cfg" <<EOF
 {
-    "server": "$domain:$http_port",
-    "auth": "$password",
-    "transport": {
-        "type": "udp",
-        "udp": {
-            "hopInterval": "10s"
-        }
-    },
-    "tls": {
-        "sni": "https://www.bing.com",
-        "insecure": true,
-        "alpn": ["h3"]
-    },
-    "quic": {
-        "initStreamReceiveWindow": 26843545,
-        "maxStreamReceiveWindow": 26843545,
-        "initConnReceiveWindow": 67108864,
-        "maxConnReceiveWindow": 67108864
-    },
-    "bandwidth": {
-        "up": "${up_bw} mbps",
-        "down": "${down_bw} mbps"
-    },
-    "http": {
-        "listen": "0.0.0.0:$http_port"
+  "server": "$server_address:$http_port",
+  "auth": "$password",
+  "transport": {
+    "type": "udp",
+    "udp": {
+      "hopInterval": "10s"
     }
+  },
+  "tls": {
+    "sni": "www.bing.com",
+    "insecure": true,
+    "alpn": ["h3"]
+  },
+  "quic": {
+    "initStreamReceiveWindow": 26843545,
+    "maxStreamReceiveWindow": 26843545,
+    "initConnReceiveWindow": 67108864,
+    "maxConnReceiveWindow": 67108864
+  },
+  "bandwidth": {
+    "up": "${up_bw} mbps",
+    "down": "${down_bw} mbps"
+  },
+  "http": {
+    "listen": "0.0.0.0:8888",
+    "username": "$proxy_username",
+    "password": "$proxy_password",
+    "realm": "$http_realm"
+  },
+  "socks5": {
+    "listen": "0.0.0.0:8888",
+    "username": "$proxy_username",
+    "password": "$proxy_password"
+  }
 }
 EOF
         echo -e "\n${GREEN}已生成端口 $http_port 实例，密码：$password"
@@ -727,6 +769,40 @@ generate_instance_auto() {
     password=$(openssl rand -base64 16)
     echo -e "${YELLOW}本实例自动生成的密码:${NC} $password"
 
+    # 选择双端部署模式
+    echo -e "${YELLOW}双端部署模式选择:${NC}"
+    echo "1. 双端同机（客户端和服务器在同一台机器）"
+    echo "2. 双端不同机（客户端和服务器在不同机器）"
+    read -p "请选择部署模式 [1-2]: " deploy_mode
+    
+    case "$deploy_mode" in
+        1)
+            server_address="127.0.0.1"
+            ;;
+        2)
+            server_address="$domain"
+            ;;
+        *)
+            echo -e "${RED}无效选择，默认使用双端不同机模式${NC}"
+            server_address="$domain"
+            ;;
+    esac
+    
+    # 配置客户端代理认证信息
+    echo -e "${YELLOW}客户端代理认证配置（HTTP和SOCKS5使用相同认证信息）:${NC}"
+    read -p "代理用户名（直接回车跳过）: " proxy_username
+    read -p "代理密码（直接回车跳过）: " proxy_password
+    read -p "HTTP代理认证域 [hy2-proxy]: " http_realm
+    http_realm=${http_realm:-hy2-proxy}
+    
+    # 生成代理认证配置
+    proxy_config=""
+    if [[ -n "$proxy_username" && -n "$proxy_password" ]]; then
+        proxy_config=",
+    \"username\": \"$proxy_username\",
+    \"password\": \"$proxy_password\""
+    fi
+
     read -p "是否为该实例添加代理出口？(y/n): " add_proxy
 
     local proxy_config=""
@@ -781,32 +857,40 @@ EOF
     local client_cfg="/root/${domain}_${http_port}.json"
     cat >"$client_cfg" <<EOF
 {
-    "server": "$domain:$http_port",
-    "auth": "$password",
-    "transport": {
-        "type": "udp",
-        "udp": {
-            "hopInterval": "10s"
-        }
-    },
-    "tls": {
-        "sni": "https://www.bing.com",
-        "insecure": true,
-        "alpn": ["h3"]
-    },
-    "quic": {
-        "initStreamReceiveWindow": 26843545,
-        "maxStreamReceiveWindow": 26843545,
-        "initConnReceiveWindow": 67108864,
-        "maxConnReceiveWindow": 67108864
-    },
-    "bandwidth": {
-        "up": "${up_bw} mbps",
-        "down": "${down_bw} mbps"
-    },
-    "http": {
-        "listen": "0.0.0.0:$http_port"
+  "server": "$server_address:$http_port",
+  "auth": "$password",
+  "transport": {
+    "type": "udp",
+    "udp": {
+      "hopInterval": "10s"
     }
+  },
+  "tls": {
+    "sni": "www.bing.com",
+    "insecure": true,
+    "alpn": ["h3"]
+  },
+  "quic": {
+    "initStreamReceiveWindow": 26843545,
+    "maxStreamReceiveWindow": 26843545,
+    "initConnReceiveWindow": 67108864,
+    "maxConnReceiveWindow": 67108864
+  },
+  "bandwidth": {
+    "up": "${up_bw} mbps",
+    "down": "${down_bw} mbps"
+  },
+  "http": {
+    "listen": "0.0.0.0:8888",
+    "username": "$proxy_username",
+    "password": "$proxy_password",
+    "realm": "$http_realm"
+  },
+  "socks5": {
+    "listen": "0.0.0.0:8888",
+    "username": "$proxy_username",
+    "password": "$proxy_password"
+  }
 }
 EOF
 
