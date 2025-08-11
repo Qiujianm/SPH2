@@ -57,13 +57,14 @@ main_menu() {
         echo "2. 服务端管理"
         echo "3. 客户端管理"
         echo "4. 系统优化"
-        echo "5. 检查更新"
-        echo "6. 运行状态"
-        echo "7. 完全卸载"
+        echo "5. 大规模配置优化（千级配置）"
+        echo "6. 检查更新"
+        echo "7. 运行状态"
+        echo "8. 完全卸载"
         echo "0. 退出脚本"
         printf "%b====================================%b\n" "${GREEN}" "${NC}"
         
-        read -t 60 -p "请选择 [0-7]: " choice || {
+        read -t 60 -p "请选择 [0-8]: " choice || {
             printf "\n%b操作超时，退出脚本%b\n" "${YELLOW}" "${NC}"
             exit 1
         }
@@ -73,8 +74,9 @@ main_menu() {
             2) bash ./server.sh ;;
             3) bash ./client.sh ;;
             4) bash ./config.sh optimize ;;
-            5) bash ./config.sh update ;;
-            6)
+            5) optimize_for_massive_configs ;;
+            6) bash ./config.sh update ;;
+            7)
                 echo -e "${YELLOW}服务端状态:${NC}"
                 systemctl status hysteria-server@* --no-pager 2>/dev/null || echo "没有运行的服务端实例"
                 echo
@@ -82,7 +84,7 @@ main_menu() {
                 systemctl status hysteriaclient@* --no-pager 2>/dev/null || echo "没有运行的客户端实例"
                 read -t 30 -n 1 -s -r -p "按任意键继续..."
                 ;;
-            7) bash ./config.sh uninstall ;;
+            8) bash ./config.sh uninstall ;;
             0) exit 0 ;;
             *)
                 printf "%b无效选择%b\n" "${RED}" "${NC}"
