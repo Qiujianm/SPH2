@@ -389,30 +389,65 @@ EOF
         echo "--------------------------------------${NC}"
     done <<< "$proxies"
     
-    # 批量创建systemd服务
-    echo -e "${YELLOW}正在批量创建systemd服务...${NC}"
-    for i in "${!ports_to_create[@]}"; do
-        if create_systemd_unit_batch "${ports_to_create[$i]}" "${configs_to_create[$i]}"; then
-            echo -e "${GREEN}✓ 服务 hysteria-server@${ports_to_create[$i]}.service 创建成功${NC}"
-        else
-            echo -e "${RED}✗ 创建服务 hysteria-server@${ports_to_create[$i]}.service 失败${NC}"
-        fi
-    done
+    # 询问是否创建系统服务
+    echo -e "${YELLOW}是否创建系统服务？${NC}"
+    echo "1. 创建系统服务（开机自启动，但速度较慢）"
+    echo "2. 直接启动进程（速度快，但重启后需要手动启动）"
+    read -p "请选择 [1-2]: " create_service
     
-    # 一次性重新加载systemd配置
-    echo -e "${YELLOW}正在重新加载systemd配置...${NC}"
-    systemctl daemon-reload
-    
-    # 批量启动所有服务
-    echo -e "${YELLOW}正在批量启动所有服务...${NC}"
-    for port in "${ports_to_create[@]}"; do
-        if systemctl start "hysteria-server@${port}.service"; then
-            echo -e "${GREEN}✓ 服务 hysteria-server@${port}.service 启动成功${NC}"
-        else
-            echo -e "${RED}✗ 服务 hysteria-server@${port}.service 启动失败${NC}"
-            systemctl status "hysteria-server@${port}.service" --no-pager
-        fi
-    done
+    if [[ "$create_service" == "1" ]]; then
+        # 批量创建systemd服务
+        echo -e "${YELLOW}正在批量创建systemd服务...${NC}"
+        for i in "${!ports_to_create[@]}"; do
+            if create_systemd_unit_batch "${ports_to_create[$i]}" "${configs_to_create[$i]}"; then
+                echo -e "${GREEN}✓ 服务 hysteria-server@${ports_to_create[$i]}.service 创建成功${NC}"
+            else
+                echo -e "${RED}✗ 创建服务 hysteria-server@${ports_to_create[$i]}.service 失败${NC}"
+            fi
+        done
+        
+        # 一次性重新加载systemd配置
+        echo -e "${YELLOW}正在重新加载systemd配置...${NC}"
+        systemctl daemon-reload
+        
+        # 批量启动所有服务
+        echo -e "${YELLOW}正在批量启动所有服务...${NC}"
+        for port in "${ports_to_create[@]}"; do
+            if systemctl start "hysteria-server@${port}.service"; then
+                echo -e "${GREEN}✓ 服务 hysteria-server@${port}.service 启动成功${NC}"
+            else
+                echo -e "${RED}✗ 服务 hysteria-server@${port}.service 启动失败${NC}"
+                systemctl status "hysteria-server@${port}.service" --no-pager
+            fi
+        done
+    else
+        # 直接启动进程（不创建系统服务）
+        echo -e "${YELLOW}正在直接启动hysteria进程...${NC}"
+        for i in "${!ports_to_create[@]}"; do
+            local port="${ports_to_create[$i]}"
+            local config="${configs_to_create[$i]}"
+            
+            # 检查是否已有进程在运行
+            if pgrep -f "hysteria.*server.*-c.*$config" >/dev/null; then
+                echo -e "${YELLOW}端口 $port 的进程已在运行，跳过${NC}"
+                continue
+            fi
+            
+            # 后台启动hysteria进程
+            nohup $HYSTERIA_BIN server -c "$config" >/dev/null 2>&1 &
+            local pid=$!
+            
+            # 等待一下确保进程启动
+            sleep 0.5
+            
+            # 检查进程是否成功启动
+            if kill -0 "$pid" 2>/dev/null; then
+                echo -e "${GREEN}✓ 端口 $port 的hysteria进程启动成功 (PID: $pid)${NC}"
+            else
+                echo -e "${RED}✗ 端口 $port 的hysteria进程启动失败${NC}"
+            fi
+        done
+    fi
 }
 
 list_instances_and_delete() {
@@ -901,8 +936,40 @@ bandwidth:
 $proxy_config
 EOF
 
-    create_systemd_unit "$server_port" "$config_file"
-    systemctl restart "hysteria-server@${server_port}.service"
+    # 询问是否创建系统服务
+    echo -e "${YELLOW}是否创建系统服务？${NC}"
+    echo "1. 创建系统服务（开机自启动，但速度较慢）"
+    echo "2. 直接启动进程（速度快，但重启后需要手动启动）"
+    read -p "请选择 [1-2]: " create_service
+    
+    if [[ "$create_service" == "1" ]]; then
+        create_systemd_unit "$server_port" "$config_file"
+        systemctl restart "hysteria-server@${server_port}.service"
+    else
+        # 直接启动进程（不创建系统服务）
+        echo -e "${YELLOW}正在直接启动hysteria进程...${NC}"
+        
+        # 检查是否已有进程在运行
+        if pgrep -f "hysteria.*server.*-c.*$config_file" >/dev/null; then
+            echo -e "${YELLOW}端口 $server_port 的进程已在运行，正在停止...${NC}"
+            pkill -f "hysteria.*server.*-c.*$config_file"
+            sleep 1
+        fi
+        
+        # 后台启动hysteria进程
+        nohup $HYSTERIA_BIN server -c "$config_file" >/dev/null 2>&1 &
+        local pid=$!
+        
+        # 等待一下确保进程启动
+        sleep 0.5
+        
+        # 检查进程是否成功启动
+        if kill -0 "$pid" 2>/dev/null; then
+            echo -e "${GREEN}✓ 端口 $server_port 的hysteria进程启动成功 (PID: $pid)${NC}"
+        else
+            echo -e "${RED}✗ 端口 $server_port 的hysteria进程启动失败${NC}"
+        fi
+    fi
 
     local client_cfg="/root/${domain}_${server_port}.json"
     cat >"$client_cfg" <<EOF
@@ -1045,19 +1112,57 @@ auto_systemd_enable_all() {
         return
     fi
     
+    # 询问是否创建系统服务
+    echo -e "${YELLOW}是否创建系统服务？${NC}"
+    echo "1. 创建系统服务（开机自启动，但速度较慢）"
+    echo "2. 直接启动进程（速度快，但重启后需要手动启动）"
+    read -p "请选择 [1-2]: " create_service
+    
     shopt -s nullglob
     found=0
-    for cfg in /root/*.json; do
-        [ -f "$cfg" ] || continue
-        name=$(basename "${cfg%.json}")
-        if systemctl enable --now hysteriaclient@"$name" &>/dev/null; then
-            echo -e "${GREEN}✓ 已注册并启动/守护实例：$name${NC}"
-        else
-            echo -e "${RED}✗ 注册实例 $name 失败${NC}"
-            systemctl status hysteriaclient@"$name" --no-pager
-        fi
-        found=1
-    done
+    
+    if [[ "$create_service" == "1" ]]; then
+        # 系统服务模式
+        for cfg in /root/*.json; do
+            [ -f "$cfg" ] || continue
+            name=$(basename "${cfg%.json}")
+            if systemctl enable --now hysteriaclient@"$name" &>/dev/null; then
+                echo -e "${GREEN}✓ 已注册并启动/守护实例：$name${NC}"
+            else
+                echo -e "${RED}✗ 注册实例 $name 失败${NC}"
+                systemctl status hysteriaclient@"$name" --no-pager
+            fi
+            found=1
+        done
+    else
+        # 直接进程模式
+        for cfg in /root/*.json; do
+            [ -f "$cfg" ] || continue
+            name=$(basename "${cfg%.json}")
+            
+            # 检查是否已有进程在运行
+            if pgrep -f "hysteria.*client.*-c.*$cfg" >/dev/null; then
+                echo -e "${YELLOW}客户端 $name 的进程已在运行，跳过${NC}"
+                continue
+            fi
+            
+            # 后台启动hysteria客户端进程
+            nohup /usr/local/bin/hysteria client -c "$cfg" >/dev/null 2>&1 &
+            local pid=$!
+            
+            # 等待一下确保进程启动
+            sleep 0.5
+            
+            # 检查进程是否成功启动
+            if kill -0 "$pid" 2>/dev/null; then
+                echo -e "${GREEN}✓ 客户端 $name 进程启动成功 (PID: $pid)${NC}"
+            else
+                echo -e "${RED}✗ 客户端 $name 进程启动失败${NC}"
+            fi
+            found=1
+        done
+    fi
+    
     if [ $found -eq 0 ]; then
         echo -e "${RED}未发现/root下的配置文件！${NC}"
     fi
@@ -1073,21 +1178,59 @@ start_remaining_instances() {
         return
     fi
     
+    # 询问是否创建系统服务
+    echo -e "${YELLOW}是否创建系统服务？${NC}"
+    echo "1. 创建系统服务（开机自启动，但速度较慢）"
+    echo "2. 直接启动进程（速度快，但重启后需要手动启动）"
+    read -p "请选择 [1-2]: " create_service
+    
     shopt -s nullglob
     found=0
-    for cfg in /root/*.json; do
-        [ -f "$cfg" ] || continue
-        name=$(basename "${cfg%.json}")
-        if ! systemctl is-active --quiet hysteriaclient@"$name"; then
-            if systemctl enable --now hysteriaclient@"$name" &>/dev/null; then
-                echo -e "${GREEN}✓ 已启动新增实例：$name${NC}"
+    
+    if [[ "$create_service" == "1" ]]; then
+        # 系统服务模式
+        for cfg in /root/*.json; do
+            [ -f "$cfg" ] || continue
+            name=$(basename "${cfg%.json}")
+            if ! systemctl is-active --quiet hysteriaclient@"$name"; then
+                if systemctl enable --now hysteriaclient@"$name" &>/dev/null; then
+                    echo -e "${GREEN}✓ 已启动新增实例：$name${NC}"
+                else
+                    echo -e "${RED}✗ 启动实例 $name 失败${NC}"
+                    systemctl status hysteriaclient@"$name" --no-pager
+                fi
+                found=1
+            fi
+        done
+    else
+        # 直接进程模式
+        for cfg in /root/*.json; do
+            [ -f "$cfg" ] || continue
+            name=$(basename "${cfg%.json}")
+            
+            # 检查是否已有进程在运行
+            if pgrep -f "hysteria.*client.*-c.*$cfg" >/dev/null; then
+                echo -e "${YELLOW}客户端 $name 的进程已在运行，跳过${NC}"
+                continue
+            fi
+            
+            # 后台启动hysteria客户端进程
+            nohup /usr/local/bin/hysteria client -c "$cfg" >/dev/null 2>&1 &
+            local pid=$!
+            
+            # 等待一下确保进程启动
+            sleep 0.5
+            
+            # 检查进程是否成功启动
+            if kill -0 "$pid" 2>/dev/null; then
+                echo -e "${GREEN}✓ 客户端 $name 进程启动成功 (PID: $pid)${NC}"
             else
-                echo -e "${RED}✗ 启动实例 $name 失败${NC}"
-                systemctl status hysteriaclient@"$name" --no-pager
+                echo -e "${RED}✗ 客户端 $name 进程启动失败${NC}"
             fi
             found=1
-        fi
-    done
+        done
+    fi
+    
     if [ $found -eq 0 ]; then
         echo -e "${YELLOW}没有剩余未启动的实例${NC}"
     fi
@@ -1123,17 +1266,62 @@ stop_all_clients_internal() {
         return
     fi
     
+    # 询问停止方式
+    echo -e "${YELLOW}选择停止方式：${NC}"
+    echo "1. 停止systemd服务（如果使用systemd启动）"
+    echo "2. 停止进程（如果直接启动进程）"
+    echo "3. 自动检测并停止（推荐）"
+    read -p "请选择 [1-3]: " stop_method
+    
     shopt -s nullglob
     stopped_count=0
+    
     for cfg in /root/*.json; do
         [ -f "$cfg" ] || continue
         name=$(basename "${cfg%.json}")
-        if systemctl stop hysteriaclient@"$name" &>/dev/null; then
-            echo -e "${GREEN}✓ 已停止 $name${NC}"
-            ((stopped_count++))
-        else
-            echo -e "${RED}✗ 停止 $name 失败${NC}"
-        fi
+        
+        case "$stop_method" in
+            1)
+                # 停止systemd服务
+                if systemctl stop hysteriaclient@"$name" &>/dev/null; then
+                    echo -e "${GREEN}✓ 已停止systemd服务 $name${NC}"
+                    ((stopped_count++))
+                else
+                    echo -e "${RED}✗ 停止systemd服务 $name 失败${NC}"
+                fi
+                ;;
+            2)
+                # 停止进程
+                if pkill -f "hysteria.*client.*-c.*$cfg" >/dev/null 2>&1; then
+                    echo -e "${GREEN}✓ 已停止进程 $name${NC}"
+                    ((stopped_count++))
+                else
+                    echo -e "${RED}✗ 停止进程 $name 失败${NC}"
+                fi
+                ;;
+            3)
+                # 自动检测并停止
+                if systemctl is-active --quiet hysteriaclient@"$name" 2>/dev/null; then
+                    # 是systemd服务
+                    if systemctl stop hysteriaclient@"$name" &>/dev/null; then
+                        echo -e "${GREEN}✓ 已停止systemd服务 $name${NC}"
+                        ((stopped_count++))
+                    else
+                        echo -e "${RED}✗ 停止systemd服务 $name 失败${NC}"
+                    fi
+                elif pgrep -f "hysteria.*client.*-c.*$cfg" >/dev/null; then
+                    # 是直接进程
+                    if pkill -f "hysteria.*client.*-c.*$cfg" >/dev/null 2>&1; then
+                        echo -e "${GREEN}✓ 已停止进程 $name${NC}"
+                        ((stopped_count++))
+                    else
+                        echo -e "${RED}✗ 停止进程 $name 失败${NC}"
+                    fi
+                else
+                    echo -e "${YELLOW}客户端 $name 未运行${NC}"
+                fi
+                ;;
+        esac
     done
     
     if [ $stopped_count -gt 0 ]; then
@@ -1222,17 +1410,78 @@ restart_all_clients_internal() {
         return
     fi
     
+    # 询问重启方式
+    echo -e "${YELLOW}选择重启方式：${NC}"
+    echo "1. 重启systemd服务（如果使用systemd启动）"
+    echo "2. 重启进程（如果直接启动进程）"
+    echo "3. 自动检测并重启（推荐）"
+    read -p "请选择 [1-3]: " restart_method
+    
     shopt -s nullglob
     restarted_count=0
+    
     for cfg in /root/*.json; do
         [ -f "$cfg" ] || continue
         name=$(basename "${cfg%.json}")
-        if systemctl restart hysteriaclient@"$name" &>/dev/null; then
-            echo -e "${GREEN}✓ 已重启 $name${NC}"
-            ((restarted_count++))
-        else
-            echo -e "${RED}✗ 重启 $name 失败${NC}"
-        fi
+        
+        case "$restart_method" in
+            1)
+                # 重启systemd服务
+                if systemctl restart hysteriaclient@"$name" &>/dev/null; then
+                    echo -e "${GREEN}✓ 已重启systemd服务 $name${NC}"
+                    ((restarted_count++))
+                else
+                    echo -e "${RED}✗ 重启systemd服务 $name 失败${NC}"
+                fi
+                ;;
+            2)
+                # 重启进程
+                if pkill -f "hysteria.*client.*-c.*$cfg" >/dev/null 2>&1; then
+                    sleep 1
+                    nohup /usr/local/bin/hysteria client -c "$cfg" >/dev/null 2>&1 &
+                    local pid=$!
+                    sleep 0.5
+                    if kill -0 "$pid" 2>/dev/null; then
+                        echo -e "${GREEN}✓ 已重启进程 $name (PID: $pid)${NC}"
+                        ((restarted_count++))
+                    else
+                        echo -e "${RED}✗ 重启进程 $name 失败${NC}"
+                    fi
+                else
+                    echo -e "${RED}✗ 停止进程 $name 失败${NC}"
+                fi
+                ;;
+            3)
+                # 自动检测并重启
+                if systemctl is-active --quiet hysteriaclient@"$name" 2>/dev/null; then
+                    # 是systemd服务
+                    if systemctl restart hysteriaclient@"$name" &>/dev/null; then
+                        echo -e "${GREEN}✓ 已重启systemd服务 $name${NC}"
+                        ((restarted_count++))
+                    else
+                        echo -e "${RED}✗ 重启systemd服务 $name 失败${NC}"
+                    fi
+                elif pgrep -f "hysteria.*client.*-c.*$cfg" >/dev/null; then
+                    # 是直接进程
+                    if pkill -f "hysteria.*client.*-c.*$cfg" >/dev/null 2>&1; then
+                        sleep 1
+                        nohup /usr/local/bin/hysteria client -c "$cfg" >/dev/null 2>&1 &
+                        local pid=$!
+                        sleep 0.5
+                        if kill -0 "$pid" 2>/dev/null; then
+                            echo -e "${GREEN}✓ 已重启进程 $name (PID: $pid)${NC}"
+                            ((restarted_count++))
+                        else
+                            echo -e "${RED}✗ 重启进程 $name 失败${NC}"
+                        fi
+                    else
+                        echo -e "${RED}✗ 停止进程 $name 失败${NC}"
+                    fi
+                else
+                    echo -e "${YELLOW}客户端 $name 未运行${NC}"
+                fi
+                ;;
+        esac
     done
     
     if [ $restarted_count -gt 0 ]; then
