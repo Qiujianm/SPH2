@@ -244,15 +244,24 @@ if [ -f "$PID_FILE" ]; then
     rm -f "$PID_FILE"
 fi
 
-# 启动所有配置文件
+# 启动所有配置文件（优化性能）
 pids=()
+config_count=0
+
 for cfg in "$CONFIG_DIR"/config_*.yaml; do
     if [ -f "$cfg" ]; then
-        echo "Starting server with config: $cfg"
+        config_count=$((config_count + 1))
+        
+        echo "Starting server with config: $cfg (${config_count})"
         "$HYSTERIA_BIN" server -c "$cfg" &
         pids+=($!)
+        
+        # 减少延迟，提高启动速度
+        sleep 0.1
     fi
 done
+
+echo "总共启动了 $config_count 个服务端配置"
 
 # 保存PID到文件
 echo "${pids[@]}" > "$PID_FILE"
@@ -276,6 +285,9 @@ Restart=always
 RestartSec=3
 User=root
 PIDFile=/var/run/hysteria-server-manager.pid
+Nice=-10
+IOSchedulingClass=1
+IOSchedulingPriority=4
 
 [Install]
 WantedBy=multi-user.target
@@ -1362,15 +1374,24 @@ if [ -f "$PID_FILE" ]; then
     rm -f "$PID_FILE"
 fi
 
-# 启动所有配置文件
+# 启动所有配置文件（优化性能）
 pids=()
+config_count=0
+
 for cfg in "$CONFIG_DIR"/*.json; do
     if [ -f "$cfg" ]; then
-        echo "Starting client with config: $cfg"
+        config_count=$((config_count + 1))
+        
+        echo "Starting client with config: $cfg (${config_count})"
         "$HYSTERIA_BIN" client -c "$cfg" &
         pids+=($!)
+        
+        # 减少延迟，提高启动速度
+        sleep 0.1
     fi
 done
+
+echo "总共启动了 $config_count 个客户端配置"
 
 # 保存PID到文件
 echo "${pids[@]}" > "$PID_FILE"
@@ -1395,6 +1416,9 @@ Restart=always
 RestartSec=3
 User=root
 PIDFile=/var/run/hysteria-client-manager.pid
+Nice=-10
+IOSchedulingClass=1
+IOSchedulingPriority=4
 
 [Install]
 WantedBy=multi-user.target
@@ -1447,6 +1471,15 @@ auto_systemd_enable_all() {
         echo -e "${YELLOW}当前没有客户端配置文件${NC}"
         return
     fi
+    
+    # 统计配置数量
+    local config_count=0
+    for cfg in /root/*.json; do
+        if [ -f "$cfg" ]; then
+            config_count=$((config_count + 1))
+        fi
+    done
+    echo -e "${GREEN}检测到 ${config_count} 个配置文件${NC}"
     
     # 询问启动方式
     echo -e "${YELLOW}选择启动方式：${NC}"
@@ -2235,8 +2268,17 @@ delete_client_config() {
 # 展示所有配置
 list_configs() {
     echo -e "${YELLOW}可用的配置文件：${NC}"
-    ls -l /root/*.json 2>/dev/null || echo "无配置文件"
+    local config_count=0
+    for cfg in /root/*.json; do
+        if [ -f "$cfg" ]; then
+            config_count=$((config_count + 1))
+            echo -e "${GREEN}${config_count}.${NC} $(basename "$cfg")"
+        fi
+    done
+    echo -e "${YELLOW}总共 ${config_count} 个配置文件${NC}"
 }
+
+
 
 while true; do
     clear
