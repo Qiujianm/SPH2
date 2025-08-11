@@ -224,6 +224,44 @@ EOF
 # 创建服务端统一服务
 create_server_unified_service() {
     local unit_file="${SYSTEMD_DIR}/hysteria-server-manager.service"
+    local script_file="/usr/local/bin/hysteria-server-manager.sh"
+    
+    # 创建启动脚本
+    cat >"$script_file" <<'EOF'
+#!/bin/bash
+# Hysteria Server Manager Script
+
+CONFIG_DIR="/etc/hysteria"
+HYSTERIA_BIN="/usr/local/bin/hysteria"
+PID_FILE="/var/run/hysteria-server-manager.pid"
+
+# 创建PID文件目录
+mkdir -p "$(dirname "$PID_FILE")"
+
+# 停止已存在的进程
+if [ -f "$PID_FILE" ]; then
+    pkill -F "$PID_FILE" 2>/dev/null || true
+    rm -f "$PID_FILE"
+fi
+
+# 启动所有配置文件
+pids=()
+for cfg in "$CONFIG_DIR"/config_*.yaml; do
+    if [ -f "$cfg" ]; then
+        echo "Starting server with config: $cfg"
+        "$HYSTERIA_BIN" server -c "$cfg" &
+        pids+=($!)
+    fi
+done
+
+# 保存PID到文件
+echo "${pids[@]}" > "$PID_FILE"
+
+# 等待所有进程
+wait
+EOF
+    
+    chmod +x "$script_file"
     
     # 创建统一服务文件
     cat >"$unit_file" <<EOF
@@ -233,10 +271,11 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/bin/bash -c 'for cfg in $CONFIG_DIR/config_*.yaml; do if [ -f "\$cfg" ]; then $HYSTERIA_BIN server -c "\$cfg" &; fi; done; wait'
+ExecStart=$script_file
 Restart=always
 RestartSec=3
 User=root
+PIDFile=/var/run/hysteria-server-manager.pid
 
 [Install]
 WantedBy=multi-user.target
@@ -946,7 +985,13 @@ status_server_unified_service() {
         for cfg in $CONFIG_DIR/config_*.yaml; do
             [ -f "$cfg" ] || continue
             port=$(basename "$cfg" | sed 's/^config_//;s/\.yaml$//')
-            echo -e "${GREEN}  - 端口: $port${NC}"
+            
+            # 检查该配置文件对应的进程是否在运行
+            if pgrep -f "hysteria.*server.*-c.*$cfg" >/dev/null; then
+                echo -e "${GREEN}  - 端口: $port (运行中)${NC}"
+            else
+                echo -e "${RED}  - 端口: $port (未运行)${NC}"
+            fi
         done
         
         # 显示进程信息
@@ -958,6 +1003,13 @@ status_server_unified_service() {
             done
         else
             echo -e "${YELLOW}  未找到相关进程${NC}"
+        fi
+        
+        # 显示PID文件信息
+        if [ -f "/var/run/hysteria-server-manager.pid" ]; then
+            echo -e "\n${YELLOW}PID文件:${NC}"
+            echo -e "${GREEN}  - /var/run/hysteria-server-manager.pid${NC}"
+            echo "内容: $(cat /var/run/hysteria-server-manager.pid)"
         fi
     else
         echo -e "${RED}✗ 统一服务未运行${NC}"
@@ -1288,6 +1340,46 @@ SERVEREOF
 cat > /root/hysteria/client.sh << 'CLIENTEOF'
 #!/bin/bash
 
+# 创建客户端启动脚本
+CLIENT_SCRIPT="/usr/local/bin/hysteria-client-manager.sh"
+if [ ! -f "$CLIENT_SCRIPT" ]; then
+  cat > "$CLIENT_SCRIPT" <<'EOF'
+#!/bin/bash
+# Hysteria Client Manager Script
+
+CONFIG_DIR="/root"
+HYSTERIA_BIN="/usr/local/bin/hysteria"
+PID_FILE="/var/run/hysteria-client-manager.pid"
+
+# 创建PID文件目录
+mkdir -p "$(dirname "$PID_FILE")"
+
+# 停止已存在的进程
+if [ -f "$PID_FILE" ]; then
+    pkill -F "$PID_FILE" 2>/dev/null || true
+    rm -f "$PID_FILE"
+fi
+
+# 启动所有配置文件
+pids=()
+for cfg in "$CONFIG_DIR"/*.json; do
+    if [ -f "$cfg" ]; then
+        echo "Starting client with config: $cfg"
+        "$HYSTERIA_BIN" client -c "$cfg" &
+        pids+=($!)
+    fi
+done
+
+# 保存PID到文件
+echo "${pids[@]}" > "$PID_FILE"
+
+# 等待所有进程
+wait
+EOF
+  chmod +x "$CLIENT_SCRIPT"
+  echo -e "\033[1;32m已创建客户端启动脚本 $CLIENT_SCRIPT\033[0m"
+fi
+
 # 自动生成统一的 systemd 服务模板（如已存在则跳过）
 SERVICE_FILE="/etc/systemd/system/hysteria-client-manager.service"
 if [ ! -f "$SERVICE_FILE" ]; then
@@ -1298,10 +1390,11 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/bin/bash -c 'for cfg in /root/*.json; do if [ -f "\$cfg" ]; then /usr/local/bin/hysteria client -c "\$cfg" &; fi; done; wait'
+ExecStart=/usr/local/bin/hysteria-client-manager.sh
 Restart=always
 RestartSec=3
 User=root
+PIDFile=/var/run/hysteria-client-manager.pid
 
 [Install]
 WantedBy=multi-user.target
@@ -1884,7 +1977,13 @@ status_unified_service() {
         for cfg in /root/*.json; do
             [ -f "$cfg" ] || continue
             name=$(basename "${cfg%.json}")
-            echo -e "${GREEN}  - $name${NC}"
+            
+            # 检查该配置文件对应的进程是否在运行
+            if pgrep -f "hysteria.*client.*-c.*$cfg" >/dev/null; then
+                echo -e "${GREEN}  - $name (运行中)${NC}"
+            else
+                echo -e "${RED}  - $name (未运行)${NC}"
+            fi
         done
         
         # 显示进程信息
@@ -1896,6 +1995,13 @@ status_unified_service() {
             done
         else
             echo -e "${YELLOW}  未找到相关进程${NC}"
+        fi
+        
+        # 显示PID文件信息
+        if [ -f "/var/run/hysteria-client-manager.pid" ]; then
+            echo -e "\n${YELLOW}PID文件:${NC}"
+            echo -e "${GREEN}  - /var/run/hysteria-client-manager.pid${NC}"
+            echo "内容: $(cat /var/run/hysteria-client-manager.pid)"
         fi
     else
         echo -e "${RED}✗ 统一服务未运行${NC}"
