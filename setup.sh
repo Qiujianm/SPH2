@@ -281,6 +281,9 @@ PIDFile=/var/run/hysteria-server-manager.pid
 WantedBy=multi-user.target
 EOF
     
+    # 重新加载systemd配置
+    systemctl daemon-reload
+    
     # 启用服务
     if systemctl enable "hysteria-server-manager.service" >/dev/null 2>&1; then
         echo -e "${GREEN}统一服务 hysteria-server-manager.service 已启用${NC}"
@@ -1342,8 +1345,7 @@ cat > /root/hysteria/client.sh << 'CLIENTEOF'
 
 # 创建客户端启动脚本
 CLIENT_SCRIPT="/usr/local/bin/hysteria-client-manager.sh"
-if [ ! -f "$CLIENT_SCRIPT" ]; then
-  cat > "$CLIENT_SCRIPT" <<'EOF'
+cat > "$CLIENT_SCRIPT" <<'EOF'
 #!/bin/bash
 # Hysteria Client Manager Script
 
@@ -1377,13 +1379,11 @@ echo "${pids[@]}" > "$PID_FILE"
 wait
 EOF
   chmod +x "$CLIENT_SCRIPT"
-  echo -e "\033[1;32m已创建客户端启动脚本 $CLIENT_SCRIPT\033[0m"
-fi
+  echo -e "\033[1;32m已更新客户端启动脚本 $CLIENT_SCRIPT\033[0m"
 
 # 自动生成统一的 systemd 服务模板（如已存在则跳过）
 SERVICE_FILE="/etc/systemd/system/hysteria-client-manager.service"
-if [ ! -f "$SERVICE_FILE" ]; then
-  cat > "$SERVICE_FILE" <<EOF
+cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=Hysteria Client Manager - Manages all client configurations
 After=network.target
@@ -1399,9 +1399,8 @@ PIDFile=/var/run/hysteria-client-manager.pid
 [Install]
 WantedBy=multi-user.target
 EOF
-  echo -e "\033[1;32m已自动生成统一服务 $SERVICE_FILE\033[0m"
-  systemctl daemon-reload
-fi
+echo -e "\033[1;32m已更新统一服务 $SERVICE_FILE\033[0m"
+systemctl daemon-reload
 
 # 保留原有的多实例模板用于兼容性
 SERVICE_FILE_MULTI="/etc/systemd/system/hysteriaclient@.service"
