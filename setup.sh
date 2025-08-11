@@ -265,14 +265,14 @@ generate_instances_batch() {
         done
 
         IFS=':' read -r proxy_ip proxy_port proxy_user proxy_pass <<< "$proxy_raw"
-        http_port="$current_port"
+        server_port="$current_port"
         current_port=$((current_port + 1))
         password=$(openssl rand -base64 16)
         proxy_url="http://$proxy_user:$proxy_pass@$proxy_ip:$proxy_port"
-        config_file="$CONFIG_DIR/config_${http_port}.yaml"
+        config_file="$CONFIG_DIR/config_${server_port}.yaml"
 
         cat >"$config_file" <<EOF
-listen: :$http_port
+listen: :$server_port
 
 tls:
   cert: $crt
@@ -308,21 +308,21 @@ acl:
     - my_proxy(all)
 EOF
 
-        if create_systemd_unit "$http_port" "$config_file"; then
-            if systemctl start "hysteria-server@${http_port}.service"; then
-                echo -e "${GREEN}✓ 服务 hysteria-server@${http_port}.service 启动成功${NC}"
+        if create_systemd_unit "$server_port" "$config_file"; then
+            if systemctl start "hysteria-server@${server_port}.service"; then
+                echo -e "${GREEN}✓ 服务 hysteria-server@${server_port}.service 启动成功${NC}"
             else
-                echo -e "${RED}✗ 服务 hysteria-server@${http_port}.service 启动失败${NC}"
-                systemctl status "hysteria-server@${http_port}.service" --no-pager
+                echo -e "${RED}✗ 服务 hysteria-server@${server_port}.service 启动失败${NC}"
+                systemctl status "hysteria-server@${server_port}.service" --no-pager
             fi
         else
-            echo -e "${RED}✗ 创建服务 hysteria-server@${http_port}.service 失败${NC}"
+            echo -e "${RED}✗ 创建服务 hysteria-server@${server_port}.service 失败${NC}"
         fi
 
-        local client_cfg="/root/${domain}_${http_port}.json"
+        local client_cfg="/root/${domain}_${server_port}.json"
         cat >"$client_cfg" <<EOF
 {
-  "server": "$server_address:$http_port",
+  "server": "$server_address:$server_port",
   "auth": "$password",
   "transport": {
     "type": "udp",
@@ -346,19 +346,19 @@ EOF
     "down": "${down_bw} mbps"
   },
   "http": {
-    "listen": "0.0.0.0:8888",
+    "listen": "0.0.0.0:$server_port",
     "username": "$proxy_username",
     "password": "$proxy_password",
     "realm": "$http_realm"
   },
   "socks5": {
-    "listen": "0.0.0.0:8888",
+    "listen": "0.0.0.0:$server_port",
     "username": "$proxy_username",
     "password": "$proxy_password"
   }
 }
 EOF
-        echo -e "\n${GREEN}已生成端口 $http_port 实例，密码：$password"
+        echo -e "\n${GREEN}已生成端口 $server_port 实例，密码：$password"
         echo "服务端配置: $config_file"
         echo "客户端配置: $client_cfg"
         echo "--------------------------------------${NC}"
@@ -742,13 +742,13 @@ status_port_range_instances() {
 generate_instance_auto() {
     echo -e "${YELLOW}自动生成单实例配置:${NC}"
     while true; do
-        read -p "请输入实例监听端口（如9202）: " http_port
-        [[ "$http_port" =~ ^[0-9]+$ ]] && [ "$http_port" -ge 1 ] && [ "$http_port" -le 65535 ] && break
+        read -p "请输入实例监听端口（如9202）: " server_port
+        [[ "$server_port" =~ ^[0-9]+$ ]] && [ "$server_port" -ge 1 ] && [ "$server_port" -le 65535 ] && break
         echo -e "${RED}无效端口，请重新输入${NC}"
     done
 
-    if is_port_in_use "$http_port" || [ -f "$CONFIG_DIR/config_${http_port}.yaml" ]; then
-        echo -e "${RED}端口 $http_port 已被占用或已存在实例，请换一个端口。${NC}"
+    if is_port_in_use "$server_port" || [ -f "$CONFIG_DIR/config_${server_port}.yaml" ]; then
+        echo -e "${RED}端口 $server_port 已被占用或已存在实例，请换一个端口。${NC}"
         return
     fi
 
@@ -822,9 +822,9 @@ acl:
     - my_proxy(all)"
     fi
 
-    local config_file="$CONFIG_DIR/config_${http_port}.yaml"
+    local config_file="$CONFIG_DIR/config_${server_port}.yaml"
     cat >"$config_file" <<EOF
-listen: :$http_port
+listen: :$server_port
 
 tls:
   cert: $crt
@@ -851,13 +851,13 @@ bandwidth:
 $proxy_config
 EOF
 
-    create_systemd_unit "$http_port" "$config_file"
-    systemctl restart "hysteria-server@${http_port}.service"
+    create_systemd_unit "$server_port" "$config_file"
+    systemctl restart "hysteria-server@${server_port}.service"
 
-    local client_cfg="/root/${domain}_${http_port}.json"
+    local client_cfg="/root/${domain}_${server_port}.json"
     cat >"$client_cfg" <<EOF
 {
-  "server": "$server_address:$http_port",
+  "server": "$server_address:$server_port",
   "auth": "$password",
   "transport": {
     "type": "udp",
@@ -881,13 +881,13 @@ EOF
     "down": "${down_bw} mbps"
   },
   "http": {
-    "listen": "0.0.0.0:8888",
+    "listen": "0.0.0.0:$server_port",
     "username": "$proxy_username",
     "password": "$proxy_password",
     "realm": "$http_realm"
   },
   "socks5": {
-    "listen": "0.0.0.0:8888",
+    "listen": "0.0.0.0:$server_port",
     "username": "$proxy_username",
     "password": "$proxy_password"
   }
@@ -898,7 +898,7 @@ EOF
     echo "服务端配置文件: $config_file"
     echo "客户端配置文件: $client_cfg"
     echo "服务器IP: $domain"
-    echo "监听端口: $http_port"
+    echo "监听端口: $server_port"
     echo "密码: $password"
 }
 
