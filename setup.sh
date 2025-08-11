@@ -181,10 +181,38 @@ User=root
 WantedBy=multi-user.target
 EOF
     
-    # 重新加载systemd配置
-    systemctl daemon-reload
+    # 启用服务（不重新加载systemd）
+    if systemctl enable "hysteria-server@${port}.service" >/dev/null 2>&1; then
+        echo -e "${GREEN}服务 hysteria-server@${port}.service 已启用${NC}"
+    else
+        echo -e "${RED}启用服务 hysteria-server@${port}.service 失败${NC}"
+        return 1
+    fi
+}
+
+create_systemd_unit_batch() {
+    local port=$1
+    local config_file=$2
+    local unit_file="${SYSTEMD_DIR}/hysteria-server@${port}.service"
     
-    # 启用服务
+    # 创建systemd服务文件
+    cat >"$unit_file" <<EOF
+[Unit]
+Description=Hysteria2 Server Instance on port $port
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=$HYSTERIA_BIN server -c $config_file
+Restart=always
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    # 启用服务（不重新加载systemd）
     if systemctl enable "hysteria-server@${port}.service" >/dev/null 2>&1; then
         echo -e "${GREEN}服务 hysteria-server@${port}.service 已启用${NC}"
     else
@@ -257,6 +285,10 @@ generate_instances_batch() {
     local crt=$(echo "$crt_and_key" | cut -d'|' -f1)
     local key=$(echo "$crt_and_key" | cut -d'|' -f2)
 
+    # 收集要创建的端口列表
+    ports_to_create=()
+    configs_to_create=()
+    
     while read -r proxy_raw; do
         [[ -z "$proxy_raw" ]] && continue
         while is_port_in_use "$current_port" || [ -f "$CONFIG_DIR/config_${current_port}.yaml" ]; do
@@ -308,16 +340,9 @@ acl:
     - my_proxy(all)
 EOF
 
-        if create_systemd_unit "$server_port" "$config_file"; then
-            if systemctl start "hysteria-server@${server_port}.service"; then
-                echo -e "${GREEN}✓ 服务 hysteria-server@${server_port}.service 启动成功${NC}"
-            else
-                echo -e "${RED}✗ 服务 hysteria-server@${server_port}.service 启动失败${NC}"
-                systemctl status "hysteria-server@${server_port}.service" --no-pager
-            fi
-        else
-            echo -e "${RED}✗ 创建服务 hysteria-server@${server_port}.service 失败${NC}"
-        fi
+        # 收集端口和配置文件信息
+        ports_to_create+=("$server_port")
+        configs_to_create+=("$config_file")
 
         local client_cfg="/root/${domain}_${server_port}.json"
         cat >"$client_cfg" <<EOF
@@ -363,6 +388,31 @@ EOF
         echo "客户端配置: $client_cfg"
         echo "--------------------------------------${NC}"
     done <<< "$proxies"
+    
+    # 批量创建systemd服务
+    echo -e "${YELLOW}正在批量创建systemd服务...${NC}"
+    for i in "${!ports_to_create[@]}"; do
+        if create_systemd_unit_batch "${ports_to_create[$i]}" "${configs_to_create[$i]}"; then
+            echo -e "${GREEN}✓ 服务 hysteria-server@${ports_to_create[$i]}.service 创建成功${NC}"
+        else
+            echo -e "${RED}✗ 创建服务 hysteria-server@${ports_to_create[$i]}.service 失败${NC}"
+        fi
+    done
+    
+    # 一次性重新加载systemd配置
+    echo -e "${YELLOW}正在重新加载systemd配置...${NC}"
+    systemctl daemon-reload
+    
+    # 批量启动所有服务
+    echo -e "${YELLOW}正在批量启动所有服务...${NC}"
+    for port in "${ports_to_create[@]}"; do
+        if systemctl start "hysteria-server@${port}.service"; then
+            echo -e "${GREEN}✓ 服务 hysteria-server@${port}.service 启动成功${NC}"
+        else
+            echo -e "${RED}✗ 服务 hysteria-server@${port}.service 启动失败${NC}"
+            systemctl status "hysteria-server@${port}.service" --no-pager
+        fi
+    done
 }
 
 list_instances_and_delete() {
