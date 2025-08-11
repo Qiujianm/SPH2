@@ -221,6 +221,36 @@ EOF
     fi
 }
 
+# 创建服务端统一服务
+create_server_unified_service() {
+    local unit_file="${SYSTEMD_DIR}/hysteria-server-manager.service"
+    
+    # 创建统一服务文件
+    cat >"$unit_file" <<EOF
+[Unit]
+Description=Hysteria2 Server Manager - Manages all server configurations
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/bin/bash -c 'for cfg in $CONFIG_DIR/config_*.yaml; do if [ -f "\$cfg" ]; then $HYSTERIA_BIN server -c "\$cfg" &; fi; done; wait'
+Restart=always
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    # 启用服务
+    if systemctl enable "hysteria-server-manager.service" >/dev/null 2>&1; then
+        echo -e "${GREEN}统一服务 hysteria-server-manager.service 已启用${NC}"
+    else
+        echo -e "${RED}启用统一服务 hysteria-server-manager.service 失败${NC}"
+        return 1
+    fi
+}
+
 is_port_in_use() {
     local port=$1
     ss -lnt | awk '{print $4}' | grep -q ":$port\$"
@@ -389,65 +419,96 @@ EOF
         echo "--------------------------------------${NC}"
     done <<< "$proxies"
     
-    # 询问是否创建系统服务
-    echo -e "${YELLOW}是否创建系统服务？${NC}"
-    echo "1. 创建系统服务（开机自启动，但速度较慢）"
-    echo "2. 直接启动进程（速度快，但重启后需要手动启动）"
-    read -p "请选择 [1-2]: " create_service
+    # 询问启动方式
+    echo -e "${YELLOW}选择启动方式：${NC}"
+    echo "1. 使用统一服务管理（推荐，一个服务管理所有配置）"
+    echo "2. 使用多实例服务（每个配置一个服务）"
+    echo "3. 直接启动进程（速度快，但重启后需要手动启动）"
+    read -p "请选择 [1-3]: " create_service
     
-    if [[ "$create_service" == "1" ]]; then
-        # 批量创建systemd服务
-        echo -e "${YELLOW}正在批量创建systemd服务...${NC}"
-        for i in "${!ports_to_create[@]}"; do
-            if create_systemd_unit_batch "${ports_to_create[$i]}" "${configs_to_create[$i]}"; then
-                echo -e "${GREEN}✓ 服务 hysteria-server@${ports_to_create[$i]}.service 创建成功${NC}"
+    case "$create_service" in
+        1)
+            # 统一服务模式
+            echo -e "${YELLOW}正在创建统一服务管理所有配置...${NC}"
+            if create_server_unified_service; then
+                echo -e "${GREEN}✓ 统一服务创建成功${NC}"
+                
+                # 重新加载systemd配置
+                echo -e "${YELLOW}正在重新加载systemd配置...${NC}"
+                systemctl daemon-reload
+                
+                # 启动统一服务
+                echo -e "${YELLOW}正在启动统一服务...${NC}"
+                if systemctl start "hysteria-server-manager.service"; then
+                    echo -e "${GREEN}✓ 统一服务启动成功，正在管理所有配置文件${NC}"
+                    # 显示正在管理的配置文件
+                    for i in "${!ports_to_create[@]}"; do
+                        local port="${ports_to_create[$i]}"
+                        echo -e "${GREEN}  - 管理配置：端口 $port${NC}"
+                    done
+                else
+                    echo -e "${RED}✗ 统一服务启动失败${NC}"
+                    systemctl status "hysteria-server-manager.service" --no-pager
+                fi
             else
-                echo -e "${RED}✗ 创建服务 hysteria-server@${ports_to_create[$i]}.service 失败${NC}"
+                echo -e "${RED}✗ 统一服务创建失败${NC}"
             fi
-        done
-        
-        # 一次性重新加载systemd配置
-        echo -e "${YELLOW}正在重新加载systemd配置...${NC}"
-        systemctl daemon-reload
-        
-        # 批量启动所有服务
-        echo -e "${YELLOW}正在批量启动所有服务...${NC}"
-        for port in "${ports_to_create[@]}"; do
-            if systemctl start "hysteria-server@${port}.service"; then
-                echo -e "${GREEN}✓ 服务 hysteria-server@${port}.service 启动成功${NC}"
-            else
-                echo -e "${RED}✗ 服务 hysteria-server@${port}.service 启动失败${NC}"
-                systemctl status "hysteria-server@${port}.service" --no-pager
-            fi
-        done
-    else
-        # 直接启动进程（不创建系统服务）
-        echo -e "${YELLOW}正在直接启动hysteria进程...${NC}"
-        for i in "${!ports_to_create[@]}"; do
-            local port="${ports_to_create[$i]}"
-            local config="${configs_to_create[$i]}"
+            ;;
+        2)
+            # 多实例服务模式
+            echo -e "${YELLOW}正在批量创建systemd服务...${NC}"
+            for i in "${!ports_to_create[@]}"; do
+                if create_systemd_unit_batch "${ports_to_create[$i]}" "${configs_to_create[$i]}"; then
+                    echo -e "${GREEN}✓ 服务 hysteria-server@${ports_to_create[$i]}.service 创建成功${NC}"
+                else
+                    echo -e "${RED}✗ 创建服务 hysteria-server@${ports_to_create[$i]}.service 失败${NC}"
+                fi
+            done
             
-            # 检查是否已有进程在运行
-            if pgrep -f "hysteria.*server.*-c.*$config" >/dev/null; then
-                echo -e "${YELLOW}端口 $port 的进程已在运行，跳过${NC}"
-                continue
-            fi
+            # 一次性重新加载systemd配置
+            echo -e "${YELLOW}正在重新加载systemd配置...${NC}"
+            systemctl daemon-reload
             
-            # 后台启动hysteria进程
-            nohup $HYSTERIA_BIN server -c "$config" >/dev/null 2>&1 &
-            local pid=$!
-            
-            # 等待一下确保进程启动
-            sleep 0.5
-            
-            # 检查进程是否成功启动
-            if kill -0 "$pid" 2>/dev/null; then
-                echo -e "${GREEN}✓ 端口 $port 的hysteria进程启动成功 (PID: $pid)${NC}"
-            else
-                echo -e "${RED}✗ 端口 $port 的hysteria进程启动失败${NC}"
-            fi
-        done
-    fi
+            # 批量启动所有服务
+            echo -e "${YELLOW}正在批量启动所有服务...${NC}"
+            for port in "${ports_to_create[@]}"; do
+                if systemctl start "hysteria-server@${port}.service"; then
+                    echo -e "${GREEN}✓ 服务 hysteria-server@${port}.service 启动成功${NC}"
+                else
+                    echo -e "${RED}✗ 服务 hysteria-server@${port}.service 启动失败${NC}"
+                    systemctl status "hysteria-server@${port}.service" --no-pager
+                fi
+            done
+            ;;
+        3)
+            # 直接进程模式
+            echo -e "${YELLOW}正在直接启动hysteria进程...${NC}"
+            for i in "${!ports_to_create[@]}"; do
+                local port="${ports_to_create[$i]}"
+                local config="${configs_to_create[$i]}"
+                
+                # 检查是否已有进程在运行
+                if pgrep -f "hysteria.*server.*-c.*$config" >/dev/null; then
+                    echo -e "${YELLOW}端口 $port 的进程已在运行，跳过${NC}"
+                    continue
+                fi
+                
+                # 后台启动hysteria进程
+                nohup $HYSTERIA_BIN server -c "$config" >/dev/null 2>&1 &
+                local pid=$!
+                
+                # 等待一下确保进程启动
+                sleep 0.5
+                
+                # 检查进程是否成功启动
+                if kill -0 "$pid" 2>/dev/null; then
+                    echo -e "${GREEN}✓ 端口 $port 的hysteria进程启动成功 (PID: $pid)${NC}"
+                else
+                    echo -e "${RED}✗ 端口 $port 的hysteria进程启动失败${NC}"
+                fi
+            done
+            ;;
+    esac
 }
 
 list_instances_and_delete() {
@@ -660,34 +721,131 @@ manage_all_instances_internal() {
         return
     fi
     
-    # 使用进程替换避免子shell问题
-    while IFS= read -r f; do
-        port=$(basename "$f" | sed 's/^config_//;s/\.yaml$//')
-        case "$act" in
-            1) 
-                if systemctl start hysteria-server@$port.service >/dev/null 2>&1; then
-                    echo -e "${GREEN}✓ 已启动端口 $port${NC}"
-                else
-                    echo -e "${RED}✗ 启动端口 $port 失败${NC}"
-                fi
-                ;;
-            2) 
-                if systemctl stop hysteria-server@$port.service >/dev/null 2>&1; then
-                    echo -e "${YELLOW}✓ 已停止端口 $port${NC}"
-                else
-                    echo -e "${RED}✗ 停止端口 $port 失败${NC}"
-                fi
-                ;;
-            3) 
-                if systemctl restart hysteria-server@$port.service >/dev/null 2>&1; then
-                    echo -e "${GREEN}✓ 已重启端口 $port${NC}"
-                else
-                    echo -e "${RED}✗ 重启端口 $port 失败${NC}"
-                fi
-                ;;
-            *) echo -e "${RED}无效选择${NC}" ;;
-        esac
-    done < <(ls $CONFIG_DIR/config_*.yaml 2>/dev/null)
+    # 询问管理方式
+    echo -e "${YELLOW}选择管理方式：${NC}"
+    echo "1. 使用统一服务管理（如果使用统一服务）"
+    echo "2. 使用多实例服务管理（如果使用多实例服务）"
+    echo "3. 自动检测并管理（推荐）"
+    read -p "请选择 [1-3]: " manage_method
+    
+    case "$manage_method" in
+        1)
+            # 统一服务管理
+            case "$act" in
+                1) 
+                    if systemctl start hysteria-server-manager.service >/dev/null 2>&1; then
+                        echo -e "${GREEN}✓ 统一服务启动成功，所有实例已启动${NC}"
+                    else
+                        echo -e "${RED}✗ 统一服务启动失败${NC}"
+                    fi
+                    ;;
+                2) 
+                    if systemctl stop hysteria-server-manager.service >/dev/null 2>&1; then
+                        echo -e "${YELLOW}✓ 统一服务停止成功，所有实例已停止${NC}"
+                    else
+                        echo -e "${RED}✗ 统一服务停止失败${NC}"
+                    fi
+                    ;;
+                3) 
+                    if systemctl restart hysteria-server-manager.service >/dev/null 2>&1; then
+                        echo -e "${GREEN}✓ 统一服务重启成功，所有实例已重启${NC}"
+                    else
+                        echo -e "${RED}✗ 统一服务重启失败${NC}"
+                    fi
+                    ;;
+                *) echo -e "${RED}无效选择${NC}" ;;
+            esac
+            ;;
+        2)
+            # 多实例服务管理
+            while IFS= read -r f; do
+                port=$(basename "$f" | sed 's/^config_//;s/\.yaml$//')
+                case "$act" in
+                    1) 
+                        if systemctl start hysteria-server@$port.service >/dev/null 2>&1; then
+                            echo -e "${GREEN}✓ 已启动端口 $port${NC}"
+                        else
+                            echo -e "${RED}✗ 启动端口 $port 失败${NC}"
+                        fi
+                        ;;
+                    2) 
+                        if systemctl stop hysteria-server@$port.service >/dev/null 2>&1; then
+                            echo -e "${YELLOW}✓ 已停止端口 $port${NC}"
+                        else
+                            echo -e "${RED}✗ 停止端口 $port 失败${NC}"
+                        fi
+                        ;;
+                    3) 
+                        if systemctl restart hysteria-server@$port.service >/dev/null 2>&1; then
+                            echo -e "${GREEN}✓ 已重启端口 $port${NC}"
+                        else
+                            echo -e "${RED}✗ 重启端口 $port 失败${NC}"
+                        fi
+                        ;;
+                    *) echo -e "${RED}无效选择${NC}" ;;
+                esac
+            done < <(ls $CONFIG_DIR/config_*.yaml 2>/dev/null)
+            ;;
+        3)
+            # 自动检测并管理
+            if systemctl is-active --quiet hysteria-server-manager.service 2>/dev/null; then
+                # 是统一服务
+                case "$act" in
+                    1) 
+                        if systemctl start hysteria-server-manager.service >/dev/null 2>&1; then
+                            echo -e "${GREEN}✓ 统一服务启动成功，所有实例已启动${NC}"
+                        else
+                            echo -e "${RED}✗ 统一服务启动失败${NC}"
+                        fi
+                        ;;
+                    2) 
+                        if systemctl stop hysteria-server-manager.service >/dev/null 2>&1; then
+                            echo -e "${YELLOW}✓ 统一服务停止成功，所有实例已停止${NC}"
+                        else
+                            echo -e "${RED}✗ 统一服务停止失败${NC}"
+                        fi
+                        ;;
+                    3) 
+                        if systemctl restart hysteria-server-manager.service >/dev/null 2>&1; then
+                            echo -e "${GREEN}✓ 统一服务重启成功，所有实例已重启${NC}"
+                        else
+                            echo -e "${RED}✗ 统一服务重启失败${NC}"
+                        fi
+                        ;;
+                    *) echo -e "${RED}无效选择${NC}" ;;
+                esac
+            else
+                # 是多实例服务
+                while IFS= read -r f; do
+                    port=$(basename "$f" | sed 's/^config_//;s/\.yaml$//')
+                    case "$act" in
+                        1) 
+                            if systemctl start hysteria-server@$port.service >/dev/null 2>&1; then
+                                echo -e "${GREEN}✓ 已启动端口 $port${NC}"
+                            else
+                                echo -e "${RED}✗ 启动端口 $port 失败${NC}"
+                            fi
+                            ;;
+                        2) 
+                            if systemctl stop hysteria-server@$port.service >/dev/null 2>&1; then
+                                echo -e "${YELLOW}✓ 已停止端口 $port${NC}"
+                            else
+                                echo -e "${RED}✗ 停止端口 $port 失败${NC}"
+                            fi
+                            ;;
+                        3) 
+                            if systemctl restart hysteria-server@$port.service >/dev/null 2>&1; then
+                                echo -e "${GREEN}✓ 已重启端口 $port${NC}"
+                            else
+                                echo -e "${RED}✗ 重启端口 $port 失败${NC}"
+                            fi
+                            ;;
+                        *) echo -e "${RED}无效选择${NC}" ;;
+                    esac
+                done < <(ls $CONFIG_DIR/config_*.yaml 2>/dev/null)
+            fi
+            ;;
+    esac
 }
 
 manage_port_range_instances() {
@@ -754,7 +912,8 @@ status_all_instances() {
     echo -e "${GREEN}查看实例状态:${NC}"
     echo "1. 查看所有实例状态"
     echo "2. 查看指定端口范围的实例状态"
-    read -p "请选择查看方式[1-2]: " view_type
+    echo "3. 查看统一服务状态"
+    read -p "请选择查看方式[1-3]: " view_type
     
     case "$view_type" in
         1)
@@ -763,11 +922,46 @@ status_all_instances() {
         2)
             status_port_range_instances
             ;;
+        3)
+            status_server_unified_service
+            ;;
         *)
             echo -e "${RED}无效选择${NC}"
             return
             ;;
     esac
+}
+
+# 查看服务端统一服务状态
+status_server_unified_service() {
+    echo -e "${YELLOW}服务端统一服务状态:${NC}"
+    
+    if systemctl is-active --quiet hysteria-server-manager.service 2>/dev/null; then
+        echo -e "${GREEN}✓ 统一服务正在运行${NC}"
+        echo "服务名称: hysteria-server-manager.service"
+        echo "运行时间: $(systemctl show hysteria-server-manager.service --property=ActiveEnterTimestamp | cut -d= -f2)"
+        
+        echo -e "\n${YELLOW}正在管理的配置文件:${NC}"
+        shopt -s nullglob
+        for cfg in $CONFIG_DIR/config_*.yaml; do
+            [ -f "$cfg" ] || continue
+            port=$(basename "$cfg" | sed 's/^config_//;s/\.yaml$//')
+            echo -e "${GREEN}  - 端口: $port${NC}"
+        done
+        
+        # 显示进程信息
+        echo -e "\n${YELLOW}相关进程:${NC}"
+        pids=$(pgrep -f "hysteria.*server.*-c.*$CONFIG_DIR/config_.*\.yaml")
+        if [ -n "$pids" ]; then
+            for pid in $pids; do
+                echo -e "${GREEN}  - PID: $pid${NC}"
+            done
+        else
+            echo -e "${YELLOW}  未找到相关进程${NC}"
+        fi
+    else
+        echo -e "${RED}✗ 统一服务未运行${NC}"
+    fi
 }
 
 status_all_instances_internal() {
@@ -936,40 +1130,68 @@ bandwidth:
 $proxy_config
 EOF
 
-    # 询问是否创建系统服务
-    echo -e "${YELLOW}是否创建系统服务？${NC}"
-    echo "1. 创建系统服务（开机自启动，但速度较慢）"
-    echo "2. 直接启动进程（速度快，但重启后需要手动启动）"
-    read -p "请选择 [1-2]: " create_service
+    # 询问启动方式
+    echo -e "${YELLOW}选择启动方式：${NC}"
+    echo "1. 使用统一服务管理（推荐，一个服务管理所有配置）"
+    echo "2. 使用多实例服务（每个配置一个服务）"
+    echo "3. 直接启动进程（速度快，但重启后需要手动启动）"
+    read -p "请选择 [1-3]: " create_service
     
-    if [[ "$create_service" == "1" ]]; then
-        create_systemd_unit "$server_port" "$config_file"
-        systemctl restart "hysteria-server@${server_port}.service"
-    else
-        # 直接启动进程（不创建系统服务）
-        echo -e "${YELLOW}正在直接启动hysteria进程...${NC}"
-        
-        # 检查是否已有进程在运行
-        if pgrep -f "hysteria.*server.*-c.*$config_file" >/dev/null; then
-            echo -e "${YELLOW}端口 $server_port 的进程已在运行，正在停止...${NC}"
-            pkill -f "hysteria.*server.*-c.*$config_file"
-            sleep 1
-        fi
-        
-        # 后台启动hysteria进程
-        nohup $HYSTERIA_BIN server -c "$config_file" >/dev/null 2>&1 &
-        local pid=$!
-        
-        # 等待一下确保进程启动
-        sleep 0.5
-        
-        # 检查进程是否成功启动
-        if kill -0 "$pid" 2>/dev/null; then
-            echo -e "${GREEN}✓ 端口 $server_port 的hysteria进程启动成功 (PID: $pid)${NC}"
-        else
-            echo -e "${RED}✗ 端口 $server_port 的hysteria进程启动失败${NC}"
-        fi
-    fi
+    case "$create_service" in
+        1)
+            # 统一服务模式
+            echo -e "${YELLOW}正在创建统一服务管理所有配置...${NC}"
+            if create_server_unified_service; then
+                echo -e "${GREEN}✓ 统一服务创建成功${NC}"
+                
+                # 重新加载systemd配置
+                echo -e "${YELLOW}正在重新加载systemd配置...${NC}"
+                systemctl daemon-reload
+                
+                # 启动统一服务
+                echo -e "${YELLOW}正在启动统一服务...${NC}"
+                if systemctl start "hysteria-server-manager.service"; then
+                    echo -e "${GREEN}✓ 统一服务启动成功，正在管理所有配置文件${NC}"
+                    echo -e "${GREEN}  - 管理配置：端口 $server_port${NC}"
+                else
+                    echo -e "${RED}✗ 统一服务启动失败${NC}"
+                    systemctl status "hysteria-server-manager.service" --no-pager
+                fi
+            else
+                echo -e "${RED}✗ 统一服务创建失败${NC}"
+            fi
+            ;;
+        2)
+            # 多实例服务模式
+            create_systemd_unit "$server_port" "$config_file"
+            systemctl restart "hysteria-server@${server_port}.service"
+            ;;
+        3)
+            # 直接进程模式
+            echo -e "${YELLOW}正在直接启动hysteria进程...${NC}"
+            
+            # 检查是否已有进程在运行
+            if pgrep -f "hysteria.*server.*-c.*$config_file" >/dev/null; then
+                echo -e "${YELLOW}端口 $server_port 的进程已在运行，正在停止...${NC}"
+                pkill -f "hysteria.*server.*-c.*$config_file"
+                sleep 1
+            fi
+            
+            # 后台启动hysteria进程
+            nohup $HYSTERIA_BIN server -c "$config_file" >/dev/null 2>&1 &
+            local pid=$!
+            
+            # 等待一下确保进程启动
+            sleep 0.5
+            
+            # 检查进程是否成功启动
+            if kill -0 "$pid" 2>/dev/null; then
+                echo -e "${GREEN}✓ 端口 $server_port 的hysteria进程启动成功 (PID: $pid)${NC}"
+            else
+                echo -e "${RED}✗ 端口 $server_port 的hysteria进程启动失败${NC}"
+            fi
+            ;;
+    esac
 
     local client_cfg="/root/${domain}_${server_port}.json"
     cat >"$client_cfg" <<EOF
