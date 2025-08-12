@@ -531,8 +531,36 @@ EOF
         # 获取服务器IP
         domain=$(curl -s ipinfo.io/ip 2>/dev/null || echo "127.0.0.1")
         
-        # 配置代理认证
-        echo -e "${YELLOW}配置代理认证信息（HTTP和SOCKS5使用相同认证）:${NC}"
+        # 询问是否使用代理配置
+        echo -e "${YELLOW}是否使用代理配置？(y/N): ${NC}"
+        read -p "" use_proxy
+        
+        if [[ "$use_proxy" =~ ^[Yy]$ ]]; then
+            echo -e "${YELLOW}请粘贴所有代理（每行为一组，格式: IP:端口:用户名:密码），输入完毕后Ctrl+D:${NC}"
+            proxies=""
+            while IFS= read -r line || [[ -n "$line" ]]; do
+                [[ -z "$line" ]] && continue
+                proxies+="$line"$'\n'
+            done
+            
+            # 将代理列表转换为数组
+            proxy_array=()
+            while read -r proxy_raw; do
+                [[ -z "$proxy_raw" ]] && continue
+                proxy_array+=("$proxy_raw")
+            done <<< "$proxies"
+            
+            proxy_count=${#proxy_array[@]}
+            if [ $proxy_count -eq 0 ]; then
+                echo -e "${RED}没有输入代理配置，将使用默认配置${NC}"
+                use_proxy="n"
+            else
+                echo -e "${GREEN}已输入 ${proxy_count} 个代理配置${NC}"
+            fi
+        fi
+        
+        # 配置客户端代理认证
+        echo -e "${YELLOW}客户端代理认证配置（HTTP和SOCKS5使用相同认证信息）:${NC}"
         read -p "代理用户名（直接回车跳过）: " proxy_username
         read -p "代理密码（直接回车跳过）: " proxy_password
         read -p "HTTP代理认证域 [hy2-proxy]: " http_realm
@@ -545,8 +573,46 @@ EOF
             # 生成随机密码
             auth=$(openssl rand -base64 32)
             
-            # 创建服务端配置
-            cat > "/etc/hysteria/config_${port}.yaml" << EOF
+            # 选择代理配置（循环使用）
+            if [[ "$use_proxy" =~ ^[Yy]$ ]] && [ $proxy_count -gt 0 ]; then
+                proxy_index=$(( (i - 1) % proxy_count ))
+                proxy_raw="${proxy_array[$proxy_index]}"
+                IFS=':' read -r proxy_ip proxy_port proxy_user proxy_pass <<< "$proxy_raw"
+                proxy_url="http://$proxy_user:$proxy_pass@$proxy_ip:$proxy_port"
+                
+                # 创建带代理的服务端配置
+                cat > "/etc/hysteria/config_${port}.yaml" << EOF
+listen: :${port}
+tls:
+  cert: /etc/hysteria/server.crt
+  key: /etc/hysteria/server.key
+auth:
+  type: password
+  password: ${auth}
+masquerade:
+  proxy:
+    url: https://www.bing.com
+    rewriteHost: true
+quic:
+  initStreamReceiveWindow: 26843545
+  maxStreamReceiveWindow: 26843545
+  initConnReceiveWindow: 67108864
+  maxConnReceiveWindow: 67108864
+bandwidth:
+  up: 185 mbps
+  down: 185 mbps
+outbounds:
+  - name: my_proxy
+    type: http
+    http:
+      url: $proxy_url
+acl:
+  inline:
+    - my_proxy(all)
+EOF
+            else
+                # 创建默认服务端配置
+                cat > "/etc/hysteria/config_${port}.yaml" << EOF
 listen: :${port}
 tls:
   cert: /etc/hysteria/server.crt
@@ -563,6 +629,7 @@ bandwidth:
   up: 185 mbps
   down: 185 mbps
 EOF
+            fi
             
             # 创建客户端配置
             cat > "/root/${domain}_${port}.json" << EOF
