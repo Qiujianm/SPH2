@@ -10,6 +10,19 @@ NC='\033[0m'
 # 检查root权限
 [ "$EUID" -ne 0 ] && echo -e "${RED}请使用root权限运行此脚本${NC}" && exit 1
 
+# 定义端口检查函数（全局可用）
+is_port_in_use() {
+    local port=$1
+    if command -v ss >/dev/null 2>&1; then
+        ss -lnt | awk '{print $4}' | grep -q ":$port\$"
+    elif command -v netstat >/dev/null 2>&1; then
+        netstat -tln | awk '{print $4}' | grep -q ":$port\$"
+    else
+        # 如果都没有，返回false（端口未使用）
+        return 1
+    fi
+}
+
 # 打印状态函数
 print_status() {
     local type=$1
@@ -1103,8 +1116,13 @@ generate_client_instances_batch_with_shard() {
     # 检查是否有服务端配置
     if ! ls /etc/hysteria/config_*.yaml 2>/dev/null | grep -q .; then
         echo -e "${RED}没有找到服务端配置文件，请先创建服务端配置${NC}"
+        echo -e "${YELLOW}请先使用选项1创建服务端配置，然后再使用此功能${NC}"
         return
     fi
+    
+    # 先调用批量生成客户端配置功能
+    echo -e "${YELLOW}正在生成客户端配置...${NC}"
+    generate_client_configs_batch
     
     # 询问启动方式
     echo -e "${YELLOW}选择启动方式：${NC}"
@@ -1409,11 +1427,6 @@ EOF
         echo -e "${RED}启用统一服务 hysteria-server-manager.service 失败${NC}"
         return 1
     fi
-}
-
-is_port_in_use() {
-    local port=$1
-    ss -lnt | awk '{print $4}' | grep -q ":$port\$"
 }
 
 generate_instances_batch() {
