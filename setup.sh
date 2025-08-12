@@ -177,11 +177,11 @@ fs.inotify.max_queued_events = 1048576
 # 进程参数
 kernel.pid_max = 4194304
 kernel.threads-max = 4194304
-kernel.max_map_count = 2147483647
+# kernel.max_map_count = 2147483647  # 某些系统可能不支持此参数
 EOF
     
-    # 应用sysctl配置
-    sysctl -p
+    # 应用sysctl配置（忽略不存在的参数）
+    sysctl -p 2>/dev/null || true
     
     # 2. 文件描述符极限提升
     echo -e "${GREEN}2. 极限提升文件描述符限制...${NC}"
