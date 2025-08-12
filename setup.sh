@@ -74,7 +74,7 @@ main_menu() {
             2) bash /root/hysteria/server.sh ;;
             3) bash /root/hysteria/client.sh ;;
             4) bash /root/hysteria/config.sh optimize ;;
-            5) bash /root/setup.sh massive_optimize ;;
+            5) optimize_for_massive_configs ;;
             6) bash /root/hysteria/config.sh update ;;
             7)
                 echo -e "${YELLOW}服务端状态:${NC}"
@@ -92,6 +92,557 @@ main_menu() {
                 ;;
         esac
     done
+}
+
+# 大规模配置优化（支持千级配置）
+optimize_for_massive_configs() {
+    echo -e "${YELLOW}=== 大规模配置优化（千级配置支持）===${NC}"
+    echo -e "${YELLOW}此功能将优化系统以支持成百上千个配置${NC}"
+    echo
+    echo "优化内容包括："
+    echo "1. 系统内核参数极限优化"
+    echo "2. 网络参数极限调优"
+    echo "3. 文件描述符极限提升"
+    echo "4. 内存和CPU极限优化"
+    echo "5. 批量生成大规模配置"
+    echo "6. 分片服务管理"
+    echo "7. 性能监控"
+    echo
+    read -p "是否继续？(y/N): " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo "操作已取消"
+        return
+    fi
+    
+    echo -e "${YELLOW}开始大规模配置优化...${NC}"
+    
+    # 1. 系统内核参数极限优化
+    echo -e "${GREEN}1. 极限优化系统内核参数...${NC}"
+    cat >> /etc/sysctl.conf << 'EOF'
+# Hysteria 大规模配置极限优化
+# 网络参数极限
+net.core.rmem_max = 268435456
+net.core.wmem_max = 268435456
+net.core.rmem_default = 524288
+net.core.wmem_default = 524288
+net.core.netdev_max_backlog = 10000
+net.core.somaxconn = 131072
+net.core.optmem_max = 50331648
+net.core.netdev_budget = 600
+net.core.netdev_budget_usecs = 8000
+
+# TCP参数极限
+net.ipv4.tcp_rmem = 8192 131072 268435456
+net.ipv4.tcp_wmem = 8192 131072 268435456
+net.ipv4.tcp_congestion_control = bbr
+net.ipv4.tcp_mtu_probing = 1
+net.ipv4.tcp_fastopen = 3
+net.ipv4.tcp_slow_start_after_idle = 0
+net.ipv4.tcp_tw_reuse = 1
+net.ipv4.tcp_fin_timeout = 5
+net.ipv4.tcp_keepalive_time = 600
+net.ipv4.tcp_keepalive_intvl = 10
+net.ipv4.tcp_keepalive_probes = 3
+net.ipv4.tcp_max_syn_backlog = 16384
+net.ipv4.tcp_max_tw_buckets = 4000000
+net.ipv4.tcp_syncookies = 1
+net.ipv4.tcp_timestamps = 1
+net.ipv4.tcp_window_scaling = 1
+net.ipv4.tcp_sack = 1
+net.ipv4.tcp_fack = 1
+net.ipv4.tcp_ecn = 2
+net.ipv4.tcp_dsack = 1
+net.ipv4.tcp_collapse = 0
+net.ipv4.tcp_retrans_collapse = 0
+
+# UDP参数极限
+net.ipv4.udp_rmem_min = 16384
+net.ipv4.udp_wmem_min = 16384
+net.ipv4.udp_mem = 786432 1048576 1572864
+
+# 内存参数极限
+vm.swappiness = 1
+vm.dirty_ratio = 10
+vm.dirty_background_ratio = 3
+vm.vfs_cache_pressure = 50
+vm.overcommit_memory = 1
+vm.overcommit_ratio = 100
+
+# 文件系统参数极限
+fs.file-max = 4194304
+fs.inotify.max_user_watches = 1048576
+fs.inotify.max_user_instances = 1048576
+fs.inotify.max_queued_events = 1048576
+
+# 进程参数
+kernel.pid_max = 4194304
+kernel.threads-max = 4194304
+kernel.max_map_count = 2147483647
+EOF
+    
+    # 应用sysctl配置
+    sysctl -p
+    
+    # 2. 文件描述符极限提升
+    echo -e "${GREEN}2. 极限提升文件描述符限制...${NC}"
+    cat >> /etc/security/limits.conf << 'EOF'
+# Hysteria 大规模配置极限优化
+root soft nofile 4194304
+root hard nofile 4194304
+* soft nofile 4194304
+* hard nofile 4194304
+root soft nproc 4194304
+root hard nproc 4194304
+* soft nproc 4194304
+* hard nproc 4194304
+EOF
+    
+    # 3. systemd极限优化
+    echo -e "${GREEN}3. 极限优化systemd配置...${NC}"
+    mkdir -p /etc/systemd/system.conf.d
+    cat > /etc/systemd/system.conf.d/99-hysteria-massive.conf << 'EOF'
+[Manager]
+DefaultLimitNOFILE=4194304
+DefaultLimitNPROC=4194304
+DefaultTasksMax=4194304
+EOF
+    
+    # 4. 创建分片服务管理器
+    echo -e "${GREEN}4. 创建分片服务管理器...${NC}"
+    
+    # 创建分片客户端管理器
+    cat > /usr/local/bin/hysteria-client-shard-manager.sh << 'EOF'
+#!/bin/bash
+# Hysteria Client Shard Manager (大规模配置分片管理)
+
+CONFIG_DIR="/root"
+HYSTERIA_BIN="/usr/local/bin/hysteria"
+PID_DIR="/var/run/hysteria-client-shards"
+LOG_DIR="/var/log/hysteria-client-shards"
+SHARD_SIZE=100  # 每个分片100个配置
+
+# 创建必要的目录
+mkdir -p "$PID_DIR"
+mkdir -p "$LOG_DIR"
+
+# 停止所有分片进程
+pkill -f "hysteria-client-shard" 2>/dev/null || true
+rm -f "$PID_DIR"/*.pid 2>/dev/null || true
+
+# 设置进程优先级
+renice -n -10 -p $$
+
+# 收集所有配置文件
+configs=()
+for cfg in "$CONFIG_DIR"/*.json; do
+    if [ -f "$cfg" ]; then
+        configs+=("$cfg")
+    fi
+done
+
+total_configs=${#configs[@]}
+echo "$(date): 发现 $total_configs 个配置文件" >> "$LOG_DIR/manager.log"
+
+# 计算分片数量
+shard_count=$(( (total_configs + SHARD_SIZE - 1) / SHARD_SIZE ))
+echo "$(date): 将分为 $shard_count 个分片" >> "$LOG_DIR/manager.log"
+
+# 启动分片
+for ((i=0; i<shard_count; i++)); do
+    start_idx=$((i * SHARD_SIZE))
+    end_idx=$((start_idx + SHARD_SIZE - 1))
+    
+    # 创建分片启动脚本
+    cat > "$PID_DIR/shard_${i}.sh" << SHARDEOF
+#!/bin/bash
+# 分片 $i 启动脚本
+
+pids=()
+config_count=0
+
+for ((j=start_idx; j<=end_idx && j<total_configs; j++)); do
+    cfg="\${configs[j]}"
+    if [ -f "\$cfg" ]; then
+        config_count=\$((config_count + 1))
+        
+        echo "\$(date): 分片$i 启动配置 \$config_count: \$cfg" >> "$LOG_DIR/shard_${i}.log"
+        "$HYSTERIA_BIN" client -c "\$cfg" >> "$LOG_DIR/shard_${i}.log" 2>&1 &
+        pids+=(\$!)
+        
+        # 每10个配置稍作延迟
+        if [ \$((config_count % 10)) -eq 0 ]; then
+            sleep 0.1
+        fi
+    fi
+done
+
+echo "\${pids[@]}" > "$PID_DIR/shard_${i}.pid"
+echo "\$(date): 分片$i 启动完成，共 \$config_count 个配置" >> "$LOG_DIR/shard_${i}.log"
+
+# 等待所有进程
+wait
+SHARDEOF
+    
+    chmod +x "$PID_DIR/shard_${i}.sh"
+    
+    # 启动分片
+    nohup "$PID_DIR/shard_${i}.sh" >/dev/null 2>&1 &
+    echo "$!" > "$PID_DIR/shard_${i}_manager.pid"
+    
+    echo "$(date): 分片 $i 已启动" >> "$LOG_DIR/manager.log"
+    sleep 0.5  # 分片间延迟
+done
+
+echo "$(date): 所有分片启动完成" >> "$LOG_DIR/manager.log"
+
+# 等待所有分片管理器
+wait
+EOF
+    
+    # 创建分片服务端管理器
+    cat > /usr/local/bin/hysteria-server-shard-manager.sh << 'EOF'
+#!/bin/bash
+# Hysteria Server Shard Manager (大规模配置分片管理)
+
+CONFIG_DIR="/etc/hysteria"
+HYSTERIA_BIN="/usr/local/bin/hysteria"
+PID_DIR="/var/run/hysteria-server-shards"
+LOG_DIR="/var/log/hysteria-server-shards"
+SHARD_SIZE=100  # 每个分片100个配置
+
+# 创建必要的目录
+mkdir -p "$PID_DIR"
+mkdir -p "$LOG_DIR"
+
+# 停止所有分片进程
+pkill -f "hysteria-server-shard" 2>/dev/null || true
+rm -f "$PID_DIR"/*.pid 2>/dev/null || true
+
+# 设置进程优先级
+renice -n -10 -p $$
+
+# 收集所有配置文件
+configs=()
+for cfg in "$CONFIG_DIR"/config_*.yaml; do
+    if [ -f "$cfg" ]; then
+        configs+=("$cfg")
+    fi
+done
+
+total_configs=${#configs[@]}
+echo "$(date): 发现 $total_configs 个配置文件" >> "$LOG_DIR/manager.log"
+
+# 计算分片数量
+shard_count=$(( (total_configs + SHARD_SIZE - 1) / SHARD_SIZE ))
+echo "$(date): 将分为 $shard_count 个分片" >> "$LOG_DIR/manager.log"
+
+# 启动分片
+for ((i=0; i<shard_count; i++)); do
+    start_idx=$((i * SHARD_SIZE))
+    end_idx=$((start_idx + SHARD_SIZE - 1))
+    
+    # 创建分片启动脚本
+    cat > "$PID_DIR/shard_${i}.sh" << SHARDEOF
+#!/bin/bash
+# 分片 $i 启动脚本
+
+pids=()
+config_count=0
+
+for ((j=start_idx; j<=end_idx && j<total_configs; j++)); do
+    cfg="\${configs[j]}"
+    if [ -f "\$cfg" ]; then
+        config_count=\$((config_count + 1))
+        
+        echo "\$(date): 分片$i 启动配置 \$config_count: \$cfg" >> "$LOG_DIR/shard_${i}.log"
+        "$HYSTERIA_BIN" server -c "\$cfg" >> "$LOG_DIR/shard_${i}.log" 2>&1 &
+        pids+=(\$!)
+        
+        # 每10个配置稍作延迟
+        if [ \$((config_count % 10)) -eq 0 ]; then
+            sleep 0.1
+        fi
+    fi
+done
+
+echo "\${pids[@]}" > "$PID_DIR/shard_${i}.pid"
+echo "\$(date): 分片$i 启动完成，共 \$config_count 个配置" >> "$LOG_DIR/shard_${i}.log"
+
+# 等待所有进程
+wait
+SHARDEOF
+    
+    chmod +x "$PID_DIR/shard_${i}.sh"
+    
+    # 启动分片
+    nohup "$PID_DIR/shard_${i}.sh" >/dev/null 2>&1 &
+    echo "$!" > "$PID_DIR/shard_${i}_manager.pid"
+    
+    echo "$(date): 分片 $i 已启动" >> "$LOG_DIR/manager.log"
+    sleep 0.5  # 分片间延迟
+done
+
+echo "$(date): 所有分片启动完成" >> "$LOG_DIR/manager.log"
+
+# 等待所有分片管理器
+wait
+EOF
+    
+    chmod +x /usr/local/bin/hysteria-client-shard-manager.sh
+    chmod +x /usr/local/bin/hysteria-server-shard-manager.sh
+    
+    # 5. 创建分片systemd服务
+    echo -e "${GREEN}5. 创建分片systemd服务...${NC}"
+    
+    # 客户端分片服务
+    cat > /etc/systemd/system/hysteria-client-shard-manager.service << 'EOF'
+[Unit]
+Description=Hysteria Client Shard Manager - Manages massive client configurations
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/hysteria-client-shard-manager.sh
+Restart=always
+RestartSec=5
+User=root
+Nice=-10
+IOSchedulingClass=1
+IOSchedulingPriority=4
+LimitNOFILE=4194304
+LimitNPROC=4194304
+MemoryMax=4G
+CPUQuota=300%
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    # 服务端分片服务
+    cat > /etc/systemd/system/hysteria-server-shard-manager.service << 'EOF'
+[Unit]
+Description=Hysteria Server Shard Manager - Manages massive server configurations
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/hysteria-server-shard-manager.sh
+Restart=always
+RestartSec=5
+User=root
+Nice=-10
+IOSchedulingClass=1
+IOSchedulingPriority=4
+LimitNOFILE=4194304
+LimitNPROC=4194304
+MemoryMax=4G
+CPUQuota=300%
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    # 6. 创建性能监控脚本
+    echo -e "${GREEN}6. 创建性能监控脚本...${NC}"
+    cat > /usr/local/bin/hysteria-monitor.sh << 'EOF'
+#!/bin/bash
+# Hysteria 性能监控脚本
+
+LOG_FILE="/var/log/hysteria-monitor.log"
+PID_DIR_CLIENT="/var/run/hysteria-client-shards"
+PID_DIR_SERVER="/var/run/hysteria-server-shards"
+
+echo "$(date): === Hysteria 性能监控报告 ===" >> "$LOG_FILE"
+
+# 统计进程数量
+client_processes=$(pgrep -f "hysteria.*client" | wc -l)
+server_processes=$(pgrep -f "hysteria.*server" | wc -l)
+
+echo "$(date): 客户端进程数: $client_processes" >> "$LOG_FILE"
+echo "$(date): 服务端进程数: $server_processes" >> "$LOG_FILE"
+
+# 统计分片状态
+client_shards=$(ls "$PID_DIR_CLIENT"/*.pid 2>/dev/null | wc -l)
+server_shards=$(ls "$PID_DIR_SERVER"/*.pid 2>/dev/null | wc -l)
+
+echo "$(date): 客户端分片数: $client_shards" >> "$LOG_FILE"
+echo "$(date): 服务端分片数: $server_shards" >> "$LOG_FILE"
+
+# 系统资源使用情况
+cpu_usage=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1)
+memory_usage=$(free | grep Mem | awk '{printf "%.1f", $3/$2 * 100.0}')
+file_descriptors=$(lsof | wc -l)
+
+echo "$(date): CPU使用率: ${cpu_usage}%" >> "$LOG_FILE"
+echo "$(date): 内存使用率: ${memory_usage}%" >> "$LOG_FILE"
+echo "$(date): 文件描述符数: $file_descriptors" >> "$LOG_FILE"
+
+# 网络连接数
+tcp_connections=$(ss -tuln | wc -l)
+udp_connections=$(ss -uln | wc -l)
+
+echo "$(date): TCP连接数: $tcp_connections" >> "$LOG_FILE"
+echo "$(date): UDP连接数: $udp_connections" >> "$LOG_FILE"
+
+echo "$(date): === 监控报告结束 ===" >> "$LOG_FILE"
+EOF
+    
+    chmod +x /usr/local/bin/hysteria-monitor.sh
+    
+    # 创建定时监控服务
+    cat > /etc/systemd/system/hysteria-monitor.timer << 'EOF'
+[Unit]
+Description=Hysteria Performance Monitor Timer
+Requires=hysteria-monitor.service
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+    
+    cat > /etc/systemd/system/hysteria-monitor.service << 'EOF'
+[Unit]
+Description=Hysteria Performance Monitor
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/hysteria-monitor.sh
+User=root
+EOF
+    
+    # 7. 询问是否批量生成大规模配置
+    echo -e "${GREEN}7. 询问是否批量生成大规模配置...${NC}"
+    read -p "请输入要生成的配置数量 (建议1000-5000): " config_count
+    config_count=${config_count:-1000}
+    
+    if [[ "$config_count" -gt 0 ]]; then
+        echo -e "${YELLOW}开始批量生成 ${config_count} 个配置...${NC}"
+        
+        # 获取服务器IP
+        domain=$(curl -s ipinfo.io/ip 2>/dev/null || echo "127.0.0.1")
+        
+        # 配置代理认证
+        echo -e "${YELLOW}配置代理认证信息（HTTP和SOCKS5使用相同认证）:${NC}"
+        read -p "代理用户名（直接回车跳过）: " proxy_username
+        read -p "代理密码（直接回车跳过）: " proxy_password
+        read -p "HTTP代理认证域 [hy2-proxy]: " http_realm
+        http_realm=${http_realm:-hy2-proxy}
+        
+        # 批量生成配置
+        for i in $(seq 1 $config_count); do
+            port=$((20000 + i))
+            
+            # 生成随机密码
+            auth=$(openssl rand -base64 32)
+            
+            # 创建服务端配置
+            cat > "/etc/hysteria/config_${port}.yaml" << EOF
+listen: :${port}
+tls:
+  cert: /etc/hysteria/server.crt
+  key: /etc/hysteria/server.key
+auth:
+  type: password
+  password: ${auth}
+masquerade:
+  type: proxy
+  proxy:
+    url: https://www.bing.com
+    rewriteHost: true
+bandwidth:
+  up: 185 mbps
+  down: 185 mbps
+EOF
+            
+            # 创建客户端配置
+            cat > "/root/${domain}_${port}.json" << EOF
+{
+  "server": "127.0.0.1:${port}",
+  "auth": "${auth}",
+  "transport": {
+    "type": "udp",
+    "udp": {
+      "hopInterval": "10s"
+    }
+  },
+  "tls": {
+    "sni": "www.bing.com",
+    "insecure": true,
+    "alpn": ["h3"]
+  },
+  "quic": {
+    "initStreamReceiveWindow": 26843545,
+    "maxStreamReceiveWindow": 26843545,
+    "initConnReceiveWindow": 67108864,
+    "maxConnReceiveWindow": 67108864
+  },
+  "bandwidth": {
+    "up": "185 mbps",
+    "down": "185 mbps"
+  },
+  "http": {
+    "listen": "0.0.0.0:${port}",
+    "username": "${proxy_username}",
+    "password": "${proxy_password}",
+    "realm": "${http_realm}"
+  },
+  "socks5": {
+    "listen": "0.0.0.0:${port}",
+    "username": "${proxy_username}",
+    "password": "${proxy_password}"
+  }
+}
+EOF
+            
+            # 每100个配置显示一次进度
+            if [ $((i % 100)) -eq 0 ]; then
+                echo -e "${GREEN}✓ 已生成配置 ${i}/${config_count}${NC}"
+            fi
+        done
+        
+        echo -e "${GREEN}✓ ${config_count} 个配置生成完成！${NC}"
+        echo -e "${YELLOW}服务端配置: /etc/hysteria/config_*.yaml${NC}"
+        echo -e "${YELLOW}客户端配置: /root/${domain}_*.json${NC}"
+    fi
+    
+    # 重新加载systemd
+    systemctl daemon-reload
+    
+    # 启用监控服务
+    systemctl enable hysteria-monitor.timer
+    systemctl start hysteria-monitor.timer
+    
+    echo -e "${GREEN}✓ 大规模配置优化完成！${NC}"
+    echo -e "${YELLOW}优化特性：${NC}"
+    echo -e "  - 支持最多 4,194,304 个文件描述符"
+    echo -e "  - 支持最多 4,194,304 个进程"
+    echo -e "  - 分片管理，每片100个配置"
+    echo -e "  - 自动性能监控（每5分钟）"
+    echo -e "  - 极限网络参数优化"
+    echo -e "  - 内存和CPU极限优化"
+    echo
+    echo -e "${YELLOW}使用方法：${NC}"
+    echo -e "  - 启动分片服务: systemctl start hysteria-client-shard-manager.service"
+    echo -e "  - 启动分片服务: systemctl start hysteria-server-shard-manager.service"
+    echo -e "  - 查看监控: tail -f /var/log/hysteria-monitor.log"
+    echo
+    read -p "是否现在重启系统以应用所有优化？(y/N): " reboot_now
+    
+    if [[ "$reboot_now" =~ ^[Yy]$ ]]; then
+        reboot
+    else
+        echo -e "${GREEN}优化完成，请手动重启系统以应用所有更改${NC}"
+    fi
 }
 
 # 启动主菜单
@@ -2815,18 +3366,6 @@ main() {
     fi
 }
 
-# 参数处理
-if [ $# -gt 0 ]; then
-    case "$1" in
-        "massive_optimize")
-            optimize_for_massive_configs
-            exit 0
-            ;;
-        *)
-            echo "未知参数: $1"
-            exit 1
-            ;;
-    esac
-fi
+
 
 main
