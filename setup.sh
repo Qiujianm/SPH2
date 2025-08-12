@@ -23,6 +23,18 @@ is_port_in_use() {
     fi
 }
 
+# 定义证书生成函数（全局可用）
+gen_cert() {
+    local domain=$1
+    local crt="$CONFIG_DIR/server_${domain}.crt"
+    local key="$CONFIG_DIR/server_${domain}.key"
+    if [ ! -f "$crt" ] || [ ! -f "$key" ]; then
+        openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 365 \
+            -keyout "$key" -out "$crt" -subj "/CN=$domain" 2>/dev/null
+    fi
+    echo "$crt|$key"
+}
+
 # 打印状态函数
 print_status() {
     local type=$1
@@ -57,6 +69,31 @@ NC='\033[0m'
 
 VERSION="2025-02-19"
 AUTHOR="Qiujianm"
+
+# 定义端口检查函数（全局可用）
+is_port_in_use() {
+    local port=$1
+    if command -v ss >/dev/null 2>&1; then
+        ss -lnt | awk '{print $4}' | grep -q ":$port\$"
+    elif command -v netstat >/dev/null 2>&1; then
+        netstat -tln | awk '{print $4}' | grep -q ":$port\$"
+    else
+        # 如果都没有，返回false（端口未使用）
+        return 1
+    fi
+}
+
+# 定义证书生成函数（全局可用）
+gen_cert() {
+    local domain=$1
+    local crt="/etc/hysteria/server_${domain}.crt"
+    local key="/etc/hysteria/server_${domain}.key"
+    if [ ! -f "$crt" ] || [ ! -f "$key" ]; then
+        openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 365 \
+            -keyout "$key" -out "$crt" -subj "/CN=$domain" 2>/dev/null
+    fi
+    echo "$crt|$key"
+}
 
 # 直接调用主菜单
 main_menu() {
@@ -1270,17 +1307,6 @@ check_env() {
     echo -e "${GREEN}✓ 配置目录已创建${NC}"
     
     echo -e "${GREEN}环境检查完成${NC}"
-}
-
-gen_cert() {
-    local domain=$1
-    local crt="$CONFIG_DIR/server_${domain}.crt"
-    local key="$CONFIG_DIR/server_${domain}.key"
-    if [ ! -f "$crt" ] || [ ! -f "$key" ]; then
-        openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 365 \
-            -keyout "$key" -out "$crt" -subj "/CN=$domain" 2>/dev/null
-    fi
-    echo "$crt|$key"
 }
 
 create_systemd_unit() {
