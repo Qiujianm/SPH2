@@ -54,29 +54,27 @@ main_menu() {
         printf "%b版本: ${VERSION}%b\n" "${GREEN}" "${NC}"
         printf "%b====================================%b\n" "${GREEN}" "${NC}"
         echo "1. 安装模式"
-        echo "2. 服务端管理"
-        echo "3. 客户端管理"
-        echo "4. 系统优化"
-        echo "5. 大规模配置优化（千级配置）"
-        echo "6. 检查更新"
-        echo "7. 运行状态"
-        echo "8. 完全卸载"
+        echo "2. 千级配置管理（服务端+客户端）"
+        echo "3. 系统优化"
+        echo "4. 大规模配置优化（千级配置）"
+        echo "5. 检查更新"
+        echo "6. 运行状态"
+        echo "7. 完全卸载"
         echo "0. 退出脚本"
         printf "%b====================================%b\n" "${GREEN}" "${NC}"
         
-        read -t 60 -p "请选择 [0-8]: " choice || {
+        read -t 60 -p "请选择 [0-7]: " choice || {
             printf "\n%b操作超时，退出脚本%b\n" "${YELLOW}" "${NC}"
             exit 1
         }
         
         case $choice in
             1) bash /root/hysteria/config.sh install ;;
-            2) bash /root/hysteria/server.sh ;;
-            3) bash /root/hysteria/client.sh ;;
-            4) bash /root/hysteria/config.sh optimize ;;
-            5) optimize_for_massive_configs ;;
-            6) bash /root/hysteria/config.sh update ;;
-            7)
+            2) manage_massive_configs ;;
+            3) bash /root/hysteria/config.sh optimize ;;
+            4) optimize_for_massive_configs ;;
+            5) bash /root/hysteria/config.sh update ;;
+            6)
                 echo -e "${YELLOW}服务端状态:${NC}"
                 systemctl status hysteria-server@* --no-pager 2>/dev/null || echo "没有运行的服务端实例"
                 echo
@@ -84,7 +82,7 @@ main_menu() {
                 systemctl status hysteriaclient@* --no-pager 2>/dev/null || echo "没有运行的客户端实例"
                 read -t 30 -n 1 -s -r -p "按任意键继续..."
                 ;;
-            8) bash /root/hysteria/config.sh uninstall ;;
+            7) bash /root/hysteria/config.sh uninstall ;;
             0) exit 0 ;;
             *)
                 printf "%b无效选择%b\n" "${RED}" "${NC}"
@@ -712,6 +710,494 @@ EOF
     fi
 }
 
+# 千级配置管理
+manage_massive_configs() {
+    while true; do
+        clear
+        echo -e "${YELLOW}=== 千级配置管理（服务端+客户端）===${NC}"
+        echo "1. 批量新建实例（服务端）"
+        echo "2. 批量新建实例（客户端）"
+        echo "3. 启动服务端分片服务"
+        echo "4. 启动客户端分片服务"
+        echo "5. 启动统一服务端管理"
+        echo "6. 启动统一客户端管理"
+        echo "7. 停止所有分片服务"
+        echo "8. 停止所有统一服务"
+        echo "9. 查看服务状态"
+        echo "10. 查看性能监控"
+        echo "11. 查看分片状态"
+        echo "12. 管理所有实例"
+        echo "0. 返回主菜单"
+        echo
+        read -p "请选择 [0-12]: " choice
+        
+        case $choice in
+            1)
+                echo -e "${YELLOW}=== 批量新建服务端实例 ===${NC}"
+                # 设置切片数量
+                read -p "请输入切片数量（每个切片包含的配置数量，建议100）: " shard_size
+                shard_size=${shard_size:-100}
+                
+                # 选择双端模式
+                echo -e "${YELLOW}双端部署模式选择:${NC}"
+                echo "1. 双端同机（客户端和服务器在同一台机器）"
+                echo "2. 双端不同机（客户端和服务器在不同机器）"
+                read -p "请选择部署模式 [1-2]: " deploy_mode
+                
+                case "$deploy_mode" in
+                    1) server_address="127.0.0.1" ;;
+                    2) server_address="$domain" ;;
+                    *) server_address="$domain" ;;
+                esac
+                
+                # 调用服务端批量新建实例
+                generate_instances_batch_with_shard "$shard_size" "$server_address"
+                ;;
+            2)
+                echo -e "${YELLOW}=== 批量新建客户端实例 ===${NC}"
+                # 设置切片数量
+                read -p "请输入切片数量（每个切片包含的配置数量，建议100）: " shard_size
+                shard_size=${shard_size:-100}
+                
+                # 调用客户端批量新建实例
+                generate_client_instances_batch_with_shard "$shard_size"
+                ;;
+            3)
+                echo -e "${YELLOW}正在启动服务端分片服务...${NC}"
+                if systemctl start hysteria-server-shard-manager.service; then
+                    echo -e "${GREEN}✓ 服务端分片服务启动成功${NC}"
+                else
+                    echo -e "${RED}✗ 服务端分片服务启动失败${NC}"
+                    systemctl status hysteria-server-shard-manager.service --no-pager
+                fi
+                ;;
+            4)
+                echo -e "${YELLOW}正在启动客户端分片服务...${NC}"
+                if systemctl start hysteria-client-shard-manager.service; then
+                    echo -e "${GREEN}✓ 客户端分片服务启动成功${NC}"
+                else
+                    echo -e "${RED}✗ 客户端分片服务启动失败${NC}"
+                    systemctl status hysteria-client-shard-manager.service --no-pager
+                fi
+                ;;
+            5)
+                echo -e "${YELLOW}正在启动统一服务端管理...${NC}"
+                if systemctl start hysteria-server-manager.service; then
+                    echo -e "${GREEN}✓ 统一服务端管理启动成功${NC}"
+                else
+                    echo -e "${RED}✗ 统一服务端管理启动失败${NC}"
+                    systemctl status hysteria-server-manager.service --no-pager
+                fi
+                ;;
+            6)
+                echo -e "${YELLOW}正在启动统一客户端管理...${NC}"
+                if systemctl start hysteria-client-manager.service; then
+                    echo -e "${GREEN}✓ 统一客户端管理启动成功${NC}"
+                else
+                    echo -e "${RED}✗ 统一客户端管理启动失败${NC}"
+                    systemctl status hysteria-client-manager.service --no-pager
+                fi
+                ;;
+            7)
+                echo -e "${YELLOW}正在停止所有分片服务...${NC}"
+                systemctl stop hysteria-server-shard-manager.service 2>/dev/null || true
+                systemctl stop hysteria-client-shard-manager.service 2>/dev/null || true
+                echo -e "${GREEN}✓ 所有分片服务已停止${NC}"
+                ;;
+            8)
+                echo -e "${YELLOW}正在停止所有统一服务...${NC}"
+                systemctl stop hysteria-server-manager.service 2>/dev/null || true
+                systemctl stop hysteria-client-manager.service 2>/dev/null || true
+                echo -e "${GREEN}✓ 所有统一服务已停止${NC}"
+                ;;
+            9)
+                echo -e "${YELLOW}=== 服务状态 ===${NC}"
+                echo -e "${GREEN}服务端分片服务:${NC}"
+                systemctl status hysteria-server-shard-manager.service --no-pager 2>/dev/null || echo "未运行"
+                echo
+                echo -e "${GREEN}客户端分片服务:${NC}"
+                systemctl status hysteria-client-shard-manager.service --no-pager 2>/dev/null || echo "未运行"
+                echo
+                echo -e "${GREEN}统一服务端管理:${NC}"
+                systemctl status hysteria-server-manager.service --no-pager 2>/dev/null || echo "未运行"
+                echo
+                echo -e "${GREEN}统一客户端管理:${NC}"
+                systemctl status hysteria-client-manager.service --no-pager 2>/dev/null || echo "未运行"
+                ;;
+            10)
+                echo -e "${YELLOW}=== 性能监控日志 ===${NC}"
+                if [ -f "/var/log/hysteria-monitor.log" ]; then
+                    tail -20 /var/log/hysteria-monitor.log
+                else
+                    echo "监控日志文件不存在"
+                fi
+                ;;
+            11)
+                echo -e "${YELLOW}=== 分片状态 ===${NC}"
+                echo -e "${GREEN}服务端分片:${NC}"
+                ls /var/run/hysteria-server-shards/ 2>/dev/null || echo "无分片文件"
+                echo
+                echo -e "${GREEN}客户端分片:${NC}"
+                ls /var/run/hysteria-client-shards/ 2>/dev/null || echo "无分片文件"
+                echo
+                echo -e "${GREEN}进程统计:${NC}"
+                echo "Hysteria进程数: $(pgrep -f 'hysteria' | wc -l)"
+                echo "服务端进程数: $(pgrep -f 'hysteria.*server' | wc -l)"
+                echo "客户端进程数: $(pgrep -f 'hysteria.*client' | wc -l)"
+                ;;
+            12)
+                echo -e "${YELLOW}=== 管理所有实例 ===${NC}"
+                echo "1. 停止所有实例"
+                echo "2. 重启所有实例"
+                echo "3. 查看所有实例状态"
+                read -p "请选择 [1-3]: " manage_choice
+                
+                case $manage_choice in
+                    1)
+                        echo -e "${YELLOW}正在停止所有实例...${NC}"
+                        pkill -f "hysteria" 2>/dev/null || true
+                        echo -e "${GREEN}✓ 所有实例已停止${NC}"
+                        ;;
+                    2)
+                        echo -e "${YELLOW}正在重启所有实例...${NC}"
+                        pkill -f "hysteria" 2>/dev/null || true
+                        sleep 2
+                        systemctl start hysteria-server-shard-manager.service 2>/dev/null || true
+                        systemctl start hysteria-client-shard-manager.service 2>/dev/null || true
+                        echo -e "${GREEN}✓ 所有实例已重启${NC}"
+                        ;;
+                    3)
+                        echo -e "${YELLOW}=== 所有实例状态 ===${NC}"
+                        echo "服务端配置文件: $(ls /etc/hysteria/config_*.yaml 2>/dev/null | wc -l) 个"
+                        echo "客户端配置文件: $(ls /root/*.json 2>/dev/null | wc -l) 个"
+                        echo "运行中的进程: $(pgrep -f 'hysteria' | wc -l) 个"
+                        ;;
+                esac
+                ;;
+            0)
+                return
+                ;;
+            *)
+                echo -e "${RED}无效选择${NC}"
+                ;;
+        esac
+        
+        echo
+        read -n 1 -s -r -p "按任意键继续..."
+    done
+}
+
+# 带切片数量的服务端批量新建实例
+generate_instances_batch_with_shard() {
+    local shard_size=$1
+    local server_address=$2
+    
+    echo -e "${YELLOW}请输入每个实例的带宽上下行限制（单位 mbps，直接回车为默认185）：${NC}"
+    read -p "上行带宽 [185]: " up_bw
+    read -p "下行带宽 [185]: " down_bw
+    up_bw=${up_bw:-185}
+    down_bw=${down_bw:-185}
+
+    echo -e "${YELLOW}请粘贴所有代理（每行为一组，格式: IP:端口:用户名:密码），输入完毕后Ctrl+D:${NC}"
+    proxies=""
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ -z "$line" ]] && continue
+        proxies+="$line"$'\n'
+    done
+
+    # 配置客户端代理认证信息
+    echo -e "${YELLOW}客户端代理认证配置（HTTP和SOCKS5使用相同认证信息）:${NC}"
+    read -p "代理用户名（直接回车跳过）: " proxy_username
+    read -p "代理密码（直接回车跳过）: " proxy_password
+    read -p "HTTP代理认证域 [hy2-proxy]: " http_realm
+    http_realm=${http_realm:-hy2-proxy}
+    
+    # 生成代理认证配置
+    proxy_config=""
+    if [[ -n "$proxy_username" && -n "$proxy_password" ]]; then
+        proxy_config=",
+    \"username\": \"$proxy_username\",
+    \"password\": \"$proxy_password\""
+    fi
+
+    read -p "请输入批量新建实例的起始端口: " start_port
+    current_port="$start_port"
+
+    local domain=$(curl -s ipinfo.io/ip || curl -s myip.ipip.net | grep -oE "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" || curl -s https://api.ip.sb/ip)
+    if [ -z "$domain" ]; then
+        read -p "请输入服务器公网IP: " domain
+    fi
+    local crt_and_key; crt_and_key=$(gen_cert "$domain")
+    local crt=$(echo "$crt_and_key" | cut -d'|' -f1)
+    local key=$(echo "$crt_and_key" | cut -d'|' -f2)
+
+    # 收集要创建的端口列表
+    ports_to_create=()
+    configs_to_create=()
+    
+    while read -r proxy_raw; do
+        [[ -z "$proxy_raw" ]] && continue
+        while is_port_in_use "$current_port" || [ -f "$CONFIG_DIR/config_${current_port}.yaml" ]; do
+            echo "端口 $current_port 已被占用，尝试下一个端口..."
+            current_port=$((current_port + 1))
+        done
+
+        IFS=':' read -r proxy_ip proxy_port proxy_user proxy_pass <<< "$proxy_raw"
+        server_port="$current_port"
+        current_port=$((current_port + 1))
+        password=$(openssl rand -base64 16)
+        proxy_url="http://$proxy_user:$proxy_pass@$proxy_ip:$proxy_port"
+        config_file="$CONFIG_DIR/config_${server_port}.yaml"
+
+        cat >"$config_file" <<EOF
+listen: :$server_port
+
+tls:
+  cert: $crt
+  key: $key
+
+auth:
+  type: password
+  password: $password
+
+masquerade:
+  proxy:
+    url: https://www.bing.com
+    rewriteHost: true
+
+quic:
+  initStreamReceiveWindow: 26843545
+  maxStreamReceiveWindow: 26843545
+  initConnReceiveWindow: 67108864
+  maxConnReceiveWindow: 67108864
+
+bandwidth:
+  up: ${up_bw} mbps
+  down: ${down_bw} mbps
+
+outbounds:
+  - name: my_proxy
+    type: http
+    http:
+      url: $proxy_url
+
+acl:
+  inline:
+    - my_proxy(all)
+EOF
+
+        # 收集端口和配置文件信息
+        ports_to_create+=("$server_port")
+        configs_to_create+=("$config_file")
+
+        local client_cfg="/root/${domain}_${server_port}.json"
+        cat >"$client_cfg" <<EOF
+{
+  "server": "$server_address:$server_port",
+  "auth": "$password",
+  "transport": {
+    "type": "udp",
+    "udp": {
+      "hopInterval": "10s"
+    }
+  },
+  "tls": {
+    "sni": "www.bing.com",
+    "insecure": true,
+    "alpn": ["h3"]
+  },
+  "quic": {
+    "initStreamReceiveWindow": 26843545,
+    "maxStreamReceiveWindow": 26843545,
+    "initConnReceiveWindow": 67108864,
+    "maxConnReceiveWindow": 67108864
+  },
+  "bandwidth": {
+    "up": "${up_bw} mbps",
+    "down": "${down_bw} mbps"
+  },
+  "http": {
+    "listen": "0.0.0.0:$((server_port + 10000))",
+    "username": "$proxy_username",
+    "password": "$proxy_password",
+    "realm": "$http_realm"
+  },
+  "socks5": {
+    "listen": "0.0.0.0:$((server_port + 20000))",
+    "username": "$proxy_username",
+    "password": "$proxy_password"
+  }
+}
+EOF
+        echo -e "\n${GREEN}已生成端口 $server_port 实例，密码：$password"
+        echo "服务端配置: $config_file"
+        echo "客户端配置: $client_cfg"
+        echo "--------------------------------------${NC}"
+    done <<< "$proxies"
+    
+    # 询问启动方式
+    echo -e "${YELLOW}选择启动方式：${NC}"
+    echo "1. 使用分片服务管理（推荐，每片${shard_size}个配置）"
+    echo "2. 使用统一服务管理（一个服务管理所有配置）"
+    echo "3. 使用多实例服务（每个配置一个服务）"
+    echo "4. 直接启动进程（速度快，但重启后需要手动启动）"
+    read -p "请选择 [1-4]: " create_service
+    
+    case "$create_service" in
+        1)
+            # 分片服务模式
+            echo -e "${YELLOW}正在创建分片服务管理所有配置...${NC}"
+            create_server_shard_service "$shard_size"
+            ;;
+        2)
+            # 统一服务模式
+            echo -e "${YELLOW}正在创建统一服务管理所有配置...${NC}"
+            if create_server_unified_service; then
+                echo -e "${GREEN}✓ 统一服务创建成功${NC}"
+            fi
+            ;;
+        3)
+            # 多实例服务模式
+            echo -e "${YELLOW}正在批量创建systemd服务...${NC}"
+            for i in "${!ports_to_create[@]}"; do
+                if create_systemd_unit_batch "${ports_to_create[$i]}" "${configs_to_create[$i]}"; then
+                    echo -e "${GREEN}✓ 服务 hysteria-server@${ports_to_create[$i]}.service 创建成功${NC}"
+                else
+                    echo -e "${RED}✗ 创建服务 hysteria-server@${ports_to_create[$i]}.service 失败${NC}"
+                fi
+            done
+            ;;
+        4)
+            # 直接进程模式
+            echo -e "${YELLOW}正在直接启动hysteria进程...${NC}"
+            for i in "${!ports_to_create[@]}"; do
+                local port="${ports_to_create[$i]}"
+                local config="${configs_to_create[$i]}"
+                
+                if pgrep -f "hysteria.*server.*-c.*$config" >/dev/null; then
+                    echo -e "${YELLOW}端口 $port 的进程已在运行，跳过${NC}"
+                    continue
+                fi
+                
+                nohup $HYSTERIA_BIN server -c "$config" >/dev/null 2>&1 &
+                local pid=$!
+                sleep 0.1
+                
+                if kill -0 "$pid" 2>/dev/null; then
+                    echo -e "${GREEN}✓ 端口 $port 的hysteria进程启动成功 (PID: $pid)${NC}"
+                else
+                    echo -e "${RED}✗ 端口 $port 的hysteria进程启动失败${NC}"
+                fi
+            done
+            ;;
+    esac
+}
+
+# 带切片数量的客户端批量新建实例
+generate_client_instances_batch_with_shard() {
+    local shard_size=$1
+    
+    echo -e "${YELLOW}=== 批量新建客户端实例 ===${NC}"
+    echo -e "${YELLOW}此功能将为现有的服务端配置生成对应的客户端配置${NC}"
+    
+    # 检查是否有服务端配置
+    if ! ls /etc/hysteria/config_*.yaml 2>/dev/null | grep -q .; then
+        echo -e "${RED}没有找到服务端配置文件，请先创建服务端配置${NC}"
+        return
+    fi
+    
+    # 询问启动方式
+    echo -e "${YELLOW}选择启动方式：${NC}"
+    echo "1. 使用分片服务管理（推荐，每片${shard_size}个配置）"
+    echo "2. 使用统一服务管理（一个服务管理所有配置）"
+    echo "3. 使用多实例服务（每个配置一个服务）"
+    echo "4. 直接启动进程（速度快，但重启后需要手动启动）"
+    read -p "请选择 [1-4]: " create_service
+    
+    case "$create_service" in
+        1)
+            # 分片服务模式
+            echo -e "${YELLOW}正在创建分片服务管理所有配置...${NC}"
+            create_client_shard_service "$shard_size"
+            ;;
+        2)
+            # 统一服务模式
+            echo -e "${YELLOW}正在启动统一服务管理所有配置...${NC}"
+            if systemctl enable --now hysteria-client-manager.service &>/dev/null; then
+                echo -e "${GREEN}✓ 统一服务启动成功${NC}"
+            else
+                echo -e "${RED}✗ 统一服务启动失败${NC}"
+            fi
+            ;;
+        3)
+            # 多实例服务模式
+            echo -e "${YELLOW}正在批量创建systemd服务...${NC}"
+            for cfg in /root/*.json; do
+                [ -f "$cfg" ] || continue
+                name=$(basename "${cfg%.json}")
+                if systemctl enable --now hysteriaclient@"$name" &>/dev/null; then
+                    echo -e "${GREEN}✓ 已注册并启动/守护实例：$name${NC}"
+                else
+                    echo -e "${RED}✗ 注册实例 $name 失败${NC}"
+                fi
+            done
+            ;;
+        4)
+            # 直接进程模式
+            echo -e "${YELLOW}正在直接启动hysteria客户端进程...${NC}"
+            for cfg in /root/*.json; do
+                [ -f "$cfg" ] || continue
+                name=$(basename "${cfg%.json}")
+                
+                if pgrep -f "hysteria.*client.*-c.*$cfg" >/dev/null; then
+                    echo -e "${YELLOW}客户端 $name 的进程已在运行，跳过${NC}"
+                    continue
+                fi
+                
+                nohup /usr/local/bin/hysteria client -c "$cfg" >/dev/null 2>&1 &
+                local pid=$!
+                sleep 0.1
+                
+                if kill -0 "$pid" 2>/dev/null; then
+                    echo -e "${GREEN}✓ 客户端 $name 进程启动成功 (PID: $pid)${NC}"
+                else
+                    echo -e "${RED}✗ 客户端 $name 进程启动失败${NC}"
+                fi
+            done
+            ;;
+    esac
+}
+
+# 创建服务端分片服务
+create_server_shard_service() {
+    local shard_size=$1
+    
+    # 更新分片管理器脚本中的切片大小
+    sed -i "s/SHARD_SIZE=100/SHARD_SIZE=$shard_size/" /usr/local/bin/hysteria-server-shard-manager.sh
+    
+    # 启动分片服务
+    if systemctl start hysteria-server-shard-manager.service; then
+        echo -e "${GREEN}✓ 服务端分片服务启动成功${NC}"
+    else
+        echo -e "${RED}✗ 服务端分片服务启动失败${NC}"
+    fi
+}
+
+# 创建客户端分片服务
+create_client_shard_service() {
+    local shard_size=$1
+    
+    # 更新分片管理器脚本中的切片大小
+    sed -i "s/SHARD_SIZE=100/SHARD_SIZE=$shard_size/" /usr/local/bin/hysteria-client-shard-manager.sh
+    
+    # 启动分片服务
+    if systemctl start hysteria-client-shard-manager.service; then
+        echo -e "${GREEN}✓ 客户端分片服务启动成功${NC}"
+    else
+        echo -e "${RED}✗ 客户端分片服务启动失败${NC}"
+    fi
+}
+
 # 启动主菜单
 main_menu
 MAINEOF
@@ -1075,13 +1561,13 @@ EOF
     "down": "${down_bw} mbps"
   },
   "http": {
-    "listen": "0.0.0.0:$server_port",
+    "listen": "0.0.0.0:$((server_port + 10000))",
     "username": "$proxy_username",
     "password": "$proxy_password",
     "realm": "$http_realm"
   },
   "socks5": {
-    "listen": "0.0.0.0:$server_port",
+    "listen": "0.0.0.0:$((server_port + 20000))",
     "username": "$proxy_username",
     "password": "$proxy_password"
   }
@@ -1907,13 +2393,13 @@ EOF
     "down": "${down_bw} mbps"
   },
   "http": {
-    "listen": "0.0.0.0:$server_port",
+    "listen": "0.0.0.0:$((server_port + 10000))",
     "username": "$proxy_username",
     "password": "$proxy_password",
     "realm": "$http_realm"
   },
   "socks5": {
-    "listen": "0.0.0.0:$server_port",
+    "listen": "0.0.0.0:$((server_port + 20000))",
     "username": "$proxy_username",
     "password": "$proxy_password"
   }
@@ -2887,15 +3373,1198 @@ delete_client_config() {
 
 # 展示所有配置
 list_configs() {
-    echo -e "${YELLOW}可用的配置文件：${NC}"
+    echo -e "${YELLOW}=== 配置信息统计 ===${NC}"
+    
+    # 检查是否有配置文件
+    if ! ls /root/*.json 2>/dev/null | grep -q .; then
+        echo -e "${YELLOW}没有找到客户端配置文件${NC}"
+        return
+    fi
+    
     local config_count=0
+    local total_bandwidth_up=0
+    local total_bandwidth_down=0
+    local port_range_min=65535
+    local port_range_max=0
+    local servers=()
+    
+    echo -e "${GREEN}配置文件列表：${NC}"
+    echo "----------------------------------------"
+    
     for cfg in /root/*.json; do
         if [ -f "$cfg" ]; then
             config_count=$((config_count + 1))
-            echo -e "${GREEN}${config_count}.${NC} $(basename "$cfg")"
+            local config_name=$(basename "$cfg")
+            
+            echo -e "${GREEN}${config_count}.${NC} $config_name"
+            
+            # 提取配置信息
+            if command -v jq >/dev/null 2>&1; then
+                local server=$(jq -r '.server // "未设置"' "$cfg" 2>/dev/null)
+                local up_bw=$(jq -r '.bandwidth.up // "未设置"' "$cfg" 2>/dev/null)
+                local down_bw=$(jq -r '.bandwidth.down // "未设置"' "$cfg" 2>/dev/null)
+                local http_port=$(jq -r '.http.listen // "未设置"' "$cfg" 2>/dev/null | sed 's/0.0.0.0://')
+                local socks5_port=$(jq -r '.socks5.listen // "未设置"' "$cfg" 2>/dev/null | sed 's/0.0.0.0://')
+                
+                echo -e "   服务器: $server"
+                echo -e "   上行带宽: $up_bw"
+                echo -e "   下行带宽: $down_bw"
+                if [ "$http_port" != "未设置" ]; then
+                    echo -e "   HTTP代理: 127.0.0.1:$http_port"
+                fi
+                if [ "$socks5_port" != "未设置" ]; then
+                    echo -e "   SOCKS5代理: 127.0.0.1:$socks5_port"
+                fi
+                
+                # 统计带宽
+                if [[ "$up_bw" =~ ^([0-9]+)\s*mbps$ ]]; then
+                    total_bandwidth_up=$((total_bandwidth_up + ${BASH_REMATCH[1]}))
+                elif [[ "$up_bw" =~ ^([0-9]+)\s*gbps$ ]]; then
+                    total_bandwidth_up=$((total_bandwidth_up + ${BASH_REMATCH[1]} * 1000))
+                fi
+                
+                if [[ "$down_bw" =~ ^([0-9]+)\s*mbps$ ]]; then
+                    total_bandwidth_down=$((total_bandwidth_down + ${BASH_REMATCH[1]}))
+                elif [[ "$down_bw" =~ ^([0-9]+)\s*gbps$ ]]; then
+                    total_bandwidth_down=$((total_bandwidth_down + ${BASH_REMATCH[1]} * 1000))
+                fi
+                
+                # 统计端口范围
+                local port=$(echo "$server" | cut -d: -f2)
+                if [[ "$port" =~ ^[0-9]+$ ]]; then
+                    if [ "$port" -lt "$port_range_min" ]; then
+                        port_range_min="$port"
+                    fi
+                    if [ "$port" -gt "$port_range_max" ]; then
+                        port_range_max="$port"
+                    fi
+                fi
+                
+                # 收集服务器信息
+                local server_ip=$(echo "$server" | cut -d: -f1)
+                if [[ ! " ${servers[@]} " =~ " ${server_ip} " ]]; then
+                    servers+=("$server_ip")
+                fi
+            else
+                echo -e "   ${YELLOW}需要安装 jq 来显示详细信息${NC}"
+            fi
+            
+            echo "----------------------------------------"
         fi
     done
-    echo -e "${YELLOW}总共 ${config_count} 个配置文件${NC}"
+    
+    echo -e "\n${GREEN}配置统计信息：${NC}"
+    echo -e "  - 配置文件总数: $config_count 个"
+    if [ $total_bandwidth_up -gt 0 ]; then
+        echo -e "  - 总上行带宽: ${total_bandwidth_up} mbps"
+    fi
+    if [ $total_bandwidth_down -gt 0 ]; then
+        echo -e "  - 总下行带宽: ${total_bandwidth_down} mbps"
+    fi
+    if [ "$port_range_min" != "65535" ] && [ "$port_range_max" != "0" ]; then
+        echo -e "  - 端口范围: $port_range_min - $port_range_max"
+    fi
+    if [ ${#servers[@]} -gt 0 ]; then
+        echo -e "  - 服务器数量: ${#servers[@]} 个"
+        echo -e "  - 服务器列表: ${servers[*]}"
+    fi
+    
+    # 显示运行状态
+    echo -e "\n${GREEN}运行状态：${NC}"
+    local running_count=0
+    for cfg in /root/*.json; do
+        if [ -f "$cfg" ]; then
+            local config_name=$(basename "$cfg")
+            if pgrep -f "hysteria.*client.*-c.*$cfg" >/dev/null; then
+                running_count=$((running_count + 1))
+            fi
+        fi
+    done
+    echo -e "  - 运行中: $running_count 个"
+    echo -e "  - 未运行: $((config_count - running_count)) 个"
+    
+    # 显示systemd服务状态
+    echo -e "\n${GREEN}Systemd服务状态：${NC}"
+    local enabled_count=0
+    local active_count=0
+    for cfg in /root/*.json; do
+        if [ -f "$cfg" ]; then
+            local config_name=$(basename "${cfg%.json}")
+            if systemctl is-enabled hysteriaclient@"$config_name" >/dev/null 2>&1; then
+                enabled_count=$((enabled_count + 1))
+            fi
+            if systemctl is-active hysteriaclient@"$config_name" >/dev/null 2>&1; then
+                active_count=$((active_count + 1))
+            fi
+        fi
+    done
+    echo -e "  - 已启用: $enabled_count 个"
+    echo -e "  - 运行中: $active_count 个"
+}
+
+# 导出客户端配置
+export_client_configs() {
+    echo -e "${YELLOW}=== 客户端配置导出功能 ===${NC}"
+    echo "1. 导出单个配置"
+    echo "2. 导出所有配置"
+    echo "3. 导出配置到压缩包"
+    echo "4. 生成配置使用说明"
+    read -p "请选择导出方式 [1-4]: " export_choice
+    
+    case "$export_choice" in
+        1)
+            export_single_config
+            ;;
+        2)
+            export_all_configs
+            ;;
+        3)
+            export_configs_archive
+            ;;
+        4)
+            generate_usage_guide
+            ;;
+        *)
+            echo -e "${RED}无效选择${NC}"
+            return
+            ;;
+    esac
+}
+
+# 导出单个配置
+export_single_config() {
+    echo -e "${YELLOW}可用的配置文件：${NC}"
+    local configs=()
+    local count=0
+    for cfg in /root/*.json; do
+        if [ -f "$cfg" ]; then
+            count=$((count + 1))
+            configs+=("$cfg")
+            echo -e "${GREEN}${count}.${NC} $(basename "$cfg")"
+        fi
+    done
+    
+    if [ $count -eq 0 ]; then
+        echo -e "${YELLOW}没有找到配置文件${NC}"
+        return
+    fi
+    
+    read -p "请选择要导出的配置文件 [1-$count]: " choice
+    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt $count ]; then
+        echo -e "${RED}无效选择${NC}"
+        return
+    fi
+    
+    local selected_config="${configs[$((choice-1))]}"
+    local config_name=$(basename "$selected_config")
+    
+    echo -e "${YELLOW}正在导出配置: $config_name${NC}"
+    
+    # 创建导出目录
+    mkdir -p /root/hysteria_exports
+    
+    # 复制配置文件
+    cp "$selected_config" "/root/hysteria_exports/$config_name"
+    
+    # 生成使用说明
+    cat > "/root/hysteria_exports/${config_name%.json}_使用说明.txt" << EOF
+Hysteria 客户端配置使用说明
+配置文件: $config_name
+
+使用方法:
+1. 将配置文件复制到客户端设备
+2. 安装 Hysteria 客户端
+3. 使用以下命令启动:
+   hysteria client -c $config_name
+
+配置信息:
+$(cat "$selected_config" | jq -r '.server // "未设置"')
+认证密码: $(cat "$selected_config" | jq -r '.auth // "未设置"')
+HTTP代理端口: $(cat "$selected_config" | jq -r '.http.listen // "未设置"' | sed 's/0.0.0.0://')
+SOCKS5代理端口: $(cat "$selected_config" | jq -r '.socks5.listen // "未设置"' | sed 's/0.0.0.0://')
+
+注意事项:
+- 确保服务器防火墙已开放相应端口
+- 客户端需要支持 QUIC 协议
+- 建议使用最新版本的 Hysteria 客户端
+EOF
+    
+    echo -e "${GREEN}✓ 配置已导出到: /root/hysteria_exports/${NC}"
+    echo -e "${GREEN}  - 配置文件: $config_name${NC}"
+    echo -e "${GREEN}  - 使用说明: ${config_name%.json}_使用说明.txt${NC}"
+}
+
+# 导出所有配置
+export_all_configs() {
+    echo -e "${YELLOW}正在导出所有配置文件...${NC}"
+    
+    # 创建导出目录
+    mkdir -p /root/hysteria_exports
+    
+    local exported_count=0
+    for cfg in /root/*.json; do
+        if [ -f "$cfg" ]; then
+            local config_name=$(basename "$cfg")
+            cp "$cfg" "/root/hysteria_exports/$config_name"
+            exported_count=$((exported_count + 1))
+            echo -e "${GREEN}✓ 已导出: $config_name${NC}"
+        fi
+    done
+    
+    # 生成批量使用说明
+    cat > "/root/hysteria_exports/批量使用说明.txt" << EOF
+Hysteria 客户端配置批量使用说明
+
+总共导出 $exported_count 个配置文件
+
+批量启动方法:
+1. 将所有配置文件复制到客户端设备
+2. 安装 Hysteria 客户端
+3. 使用以下脚本批量启动:
+
+#!/bin/bash
+for cfg in *.json; do
+    if [ -f "\$cfg" ]; then
+        echo "启动配置: \$cfg"
+        hysteria client -c "\$cfg" &
+    fi
+done
+
+或者使用统一管理脚本:
+hysteria client -c 配置文件1.json &
+hysteria client -c 配置文件2.json &
+...
+
+注意事项:
+- 确保服务器防火墙已开放相应端口
+- 客户端需要支持 QUIC 协议
+- 建议使用最新版本的 Hysteria 客户端
+- 每个配置使用不同的本地端口，避免冲突
+EOF
+    
+    echo -e "${GREEN}✓ 已导出 $exported_count 个配置文件到: /root/hysteria_exports/${NC}"
+}
+
+# 导出配置到压缩包
+export_configs_archive() {
+    echo -e "${YELLOW}正在创建配置压缩包...${NC}"
+    
+    # 创建临时导出目录
+    local temp_dir="/tmp/hysteria_export_$$"
+    mkdir -p "$temp_dir"
+    
+    local exported_count=0
+    for cfg in /root/*.json; do
+        if [ -f "$cfg" ]; then
+            local config_name=$(basename "$cfg")
+            cp "$cfg" "$temp_dir/$config_name"
+            exported_count=$((exported_count + 1))
+        fi
+    done
+    
+    if [ $exported_count -eq 0 ]; then
+        echo -e "${YELLOW}没有找到配置文件${NC}"
+        rm -rf "$temp_dir"
+        return
+    fi
+    
+    # 生成使用说明
+    cat > "$temp_dir/使用说明.txt" << EOF
+Hysteria 客户端配置包
+
+包含 $exported_count 个配置文件
+
+使用方法:
+1. 解压此压缩包到客户端设备
+2. 安装 Hysteria 客户端
+3. 根据需要启动单个或多个配置
+
+单个配置启动:
+hysteria client -c 配置文件.json
+
+批量启动脚本:
+#!/bin/bash
+for cfg in *.json; do
+    if [ -f "\$cfg" ]; then
+        echo "启动配置: \$cfg"
+        hysteria client -c "\$cfg" &
+    fi
+done
+
+配置信息:
+$(for cfg in "$temp_dir"/*.json; do
+    if [ -f "$cfg" ]; then
+        local config_name=$(basename "$cfg")
+        echo "配置文件: $config_name"
+        echo "服务器: $(cat "$cfg" | jq -r '.server // "未设置"')"
+        echo "HTTP端口: $(cat "$cfg" | jq -r '.http.listen // "未设置"' | sed 's/0.0.0.0://')"
+        echo "SOCKS5端口: $(cat "$cfg" | jq -r '.socks5.listen // "未设置"' | sed 's/0.0.0.0://')"
+        echo "---"
+    fi
+done)
+
+注意事项:
+- 确保服务器防火墙已开放相应端口
+- 客户端需要支持 QUIC 协议
+- 建议使用最新版本的 Hysteria 客户端
+- 每个配置使用不同的本地端口，避免冲突
+EOF
+    
+    # 创建压缩包
+    local timestamp=$(date +%Y%m%d_%H%M%S)
+    local archive_name="hysteria_configs_${timestamp}.tar.gz"
+    
+    cd "$temp_dir"
+    tar -czf "/root/$archive_name" ./*
+    cd - > /dev/null
+    
+    # 清理临时目录
+    rm -rf "$temp_dir"
+    
+    echo -e "${GREEN}✓ 配置压缩包已创建: /root/$archive_name${NC}"
+    echo -e "${GREEN}  包含 $exported_count 个配置文件${NC}"
+}
+
+# 批量生成客户端配置
+generate_client_configs_batch() {
+    echo -e "${YELLOW}=== 批量生成客户端配置 ===${NC}"
+    
+    # 检查是否有服务端配置
+    if ! ls /etc/hysteria/config_*.yaml 2>/dev/null | grep -q .; then
+        echo -e "${RED}没有找到服务端配置文件，请先创建服务端配置${NC}"
+        return
+    fi
+    
+    # 获取服务器IP
+    local domain=$(curl -s ipinfo.io/ip 2>/dev/null || echo "127.0.0.1")
+    
+    # 询问双端部署模式
+    echo -e "${YELLOW}双端部署模式选择:${NC}"
+    echo "1. 双端同机（客户端和服务器在同一台机器）"
+    echo "2. 双端不同机（客户端和服务器在不同机器）"
+    read -p "请选择部署模式 [1-2]: " deploy_mode
+    
+    case "$deploy_mode" in
+        1) server_address="127.0.0.1" ;;
+        2) server_address="$domain" ;;
+        *) server_address="$domain" ;;
+    esac
+    
+    # 配置客户端代理认证信息
+    echo -e "${YELLOW}客户端代理认证配置（HTTP和SOCKS5使用相同认证信息）:${NC}"
+    read -p "代理用户名（直接回车跳过）: " proxy_username
+    read -p "代理密码（直接回车跳过）: " proxy_password
+    read -p "HTTP代理认证域 [hy2-proxy]: " http_realm
+    http_realm=${http_realm:-hy2-proxy}
+    
+    # 询问是否覆盖现有配置
+    echo -e "${YELLOW}是否覆盖现有的客户端配置文件？(y/N): ${NC}"
+    read -p "" overwrite_choice
+    
+    local generated_count=0
+    local skipped_count=0
+    
+    # 遍历所有服务端配置
+    for server_config in /etc/hysteria/config_*.yaml; do
+        [ -f "$server_config" ] || continue
+        
+        # 提取端口号
+        local port=$(basename "$server_config" | sed 's/^config_//;s/\.yaml$//')
+        
+        # 检查客户端配置是否已存在
+        local client_config="/root/${domain}_${port}.json"
+        if [ -f "$client_config" ] && [[ ! "$overwrite_choice" =~ ^[Yy]$ ]]; then
+            echo -e "${YELLOW}跳过端口 $port（配置文件已存在）${NC}"
+            ((skipped_count++))
+            continue
+        fi
+        
+        # 从服务端配置中提取认证密码
+        local password=$(grep -E "^  password:" "$server_config" | awk '{print $2}' | tr -d '"')
+        if [ -z "$password" ]; then
+            echo -e "${RED}无法从服务端配置中提取密码: $server_config${NC}"
+            continue
+        fi
+        
+        # 从服务端配置中提取带宽设置
+        local up_bw=$(grep -E "^  up:" "$server_config" | awk '{print $2}' | tr -d '"' || echo "185 mbps")
+        local down_bw=$(grep -E "^  down:" "$server_config" | awk '{print $2}' | tr -d '"' || echo "185 mbps")
+        
+        # 生成客户端配置
+        cat > "$client_config" << EOF
+{
+  "server": "$server_address:$port",
+  "auth": "$password",
+  "transport": {
+    "type": "udp",
+    "udp": {
+      "hopInterval": "10s"
+    }
+  },
+  "tls": {
+    "sni": "www.bing.com",
+    "insecure": true,
+    "alpn": ["h3"]
+  },
+  "quic": {
+    "initStreamReceiveWindow": 26843545,
+    "maxStreamReceiveWindow": 26843545,
+    "initConnReceiveWindow": 67108864,
+    "maxConnReceiveWindow": 67108864
+  },
+  "bandwidth": {
+    "up": "$up_bw",
+    "down": "$down_bw"
+  },
+  "http": {
+    "listen": "0.0.0.0:$((port + 10000))",
+    "username": "$proxy_username",
+    "password": "$proxy_password",
+    "realm": "$http_realm"
+  },
+  "socks5": {
+    "listen": "0.0.0.0:$((port + 20000))",
+    "username": "$proxy_username",
+    "password": "$proxy_password"
+  }
+}
+EOF
+        
+        echo -e "${GREEN}✓ 已生成客户端配置: $(basename "$client_config")${NC}"
+        echo -e "  服务器: $server_address:$port"
+        echo -e "  HTTP代理端口: $((port + 10000))"
+        echo -e "  SOCKS5代理端口: $((port + 20000))"
+        ((generated_count++))
+    done
+    
+    echo -e "\n${GREEN}批量生成完成！${NC}"
+    echo -e "${GREEN}  - 新生成: $generated_count 个配置${NC}"
+    if [ $skipped_count -gt 0 ]; then
+        echo -e "${YELLOW}  - 跳过: $skipped_count 个配置（已存在）${NC}"
+    fi
+    
+    # 询问是否立即启动客户端
+    if [ $generated_count -gt 0 ]; then
+        echo -e "\n${YELLOW}是否立即启动新生成的客户端配置？(y/N): ${NC}"
+        read -p "" start_choice
+        if [[ "$start_choice" =~ ^[Yy]$ ]]; then
+            auto_systemd_enable_all
+        fi
+    fi
+}
+
+# 验证客户端配置
+validate_client_configs() {
+    echo -e "${YELLOW}=== 验证客户端配置 ===${NC}"
+    
+    # 检查是否有配置文件
+    if ! ls /root/*.json 2>/dev/null | grep -q .; then
+        echo -e "${YELLOW}没有找到客户端配置文件${NC}"
+        return
+    fi
+    
+    local valid_count=0
+    local invalid_count=0
+    local total_count=0
+    
+    echo -e "${YELLOW}正在验证配置文件...${NC}"
+    
+    for cfg in /root/*.json; do
+        [ -f "$cfg" ] || continue
+        local config_name=$(basename "$cfg")
+        ((total_count++))
+        
+        echo -e "\n${GREEN}验证配置: $config_name${NC}"
+        
+        # 检查JSON格式
+        if ! jq empty "$cfg" 2>/dev/null; then
+            echo -e "${RED}  ✗ JSON格式错误${NC}"
+            ((invalid_count++))
+            continue
+        fi
+        
+        # 检查必需字段
+        local required_fields=("server" "auth" "tls" "quic" "bandwidth")
+        local missing_fields=()
+        
+        for field in "${required_fields[@]}"; do
+            if ! jq -e ".$field" "$cfg" >/dev/null 2>&1; then
+                missing_fields+=("$field")
+            fi
+        done
+        
+        if [ ${#missing_fields[@]} -gt 0 ]; then
+            echo -e "${RED}  ✗ 缺少必需字段: ${missing_fields[*]}${NC}"
+            ((invalid_count++))
+            continue
+        fi
+        
+        # 检查服务器地址格式
+        local server=$(jq -r '.server' "$cfg")
+        if [[ ! "$server" =~ ^[^:]+:[0-9]+$ ]]; then
+            echo -e "${RED}  ✗ 服务器地址格式错误: $server${NC}"
+            ((invalid_count++))
+            continue
+        fi
+        
+        # 检查端口范围
+        local port=$(echo "$server" | cut -d: -f2)
+        if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+            echo -e "${RED}  ✗ 端口号超出范围: $port${NC}"
+            ((invalid_count++))
+            continue
+        fi
+        
+        # 检查HTTP和SOCKS5端口
+        if jq -e '.http' "$cfg" >/dev/null 2>&1; then
+            local http_port=$(jq -r '.http.listen' "$cfg" | sed 's/0.0.0.0://')
+            if [ "$http_port" -lt 1 ] || [ "$http_port" -gt 65535 ]; then
+                echo -e "${RED}  ✗ HTTP端口超出范围: $http_port${NC}"
+                ((invalid_count++))
+                continue
+            fi
+        fi
+        
+        if jq -e '.socks5' "$cfg" >/dev/null 2>&1; then
+            local socks5_port=$(jq -r '.socks5.listen' "$cfg" | sed 's/0.0.0.0://')
+            if [ "$socks5_port" -lt 1 ] || [ "$socks5_port" -gt 65535 ]; then
+                echo -e "${RED}  ✗ SOCKS5端口超出范围: $socks5_port${NC}"
+                ((invalid_count++))
+                continue
+            fi
+        fi
+        
+        # 检查带宽设置
+        local up_bw=$(jq -r '.bandwidth.up' "$cfg")
+        local down_bw=$(jq -r '.bandwidth.down' "$cfg")
+        
+        if [[ ! "$up_bw" =~ ^[0-9]+\s*(mbps|gbps|kbps)$ ]]; then
+            echo -e "${RED}  ✗ 上行带宽格式错误: $up_bw${NC}"
+            ((invalid_count++))
+            continue
+        fi
+        
+        if [[ ! "$down_bw" =~ ^[0-9]+\s*(mbps|gbps|kbps)$ ]]; then
+            echo -e "${RED}  ✗ 下行带宽格式错误: $down_bw${NC}"
+            ((invalid_count++))
+            continue
+        fi
+        
+        # 配置有效
+        echo -e "${GREEN}  ✓ 配置有效${NC}"
+        echo -e "    服务器: $server"
+        echo -e "    上行带宽: $up_bw"
+        echo -e "    下行带宽: $down_bw"
+        if jq -e '.http' "$cfg" >/dev/null 2>&1; then
+            echo -e "    HTTP代理: 127.0.0.1:$http_port"
+        fi
+        if jq -e '.socks5' "$cfg" >/dev/null 2>&1; then
+            echo -e "    SOCKS5代理: 127.0.0.1:$socks5_port"
+        fi
+        ((valid_count++))
+    done
+    
+    echo -e "\n${GREEN}验证完成！${NC}"
+    echo -e "${GREEN}  - 有效配置: $valid_count 个${NC}"
+    if [ $invalid_count -gt 0 ]; then
+        echo -e "${RED}  - 无效配置: $invalid_count 个${NC}"
+    fi
+    echo -e "${YELLOW}  - 总计: $total_count 个${NC}"
+    
+    # 如果有无效配置，询问是否修复
+    if [ $invalid_count -gt 0 ]; then
+        echo -e "\n${YELLOW}是否尝试修复无效配置？(y/N): ${NC}"
+        read -p "" fix_choice
+        if [[ "$fix_choice" =~ ^[Yy]$ ]]; then
+            fix_invalid_configs
+        fi
+    fi
+}
+
+# 修复无效配置
+fix_invalid_configs() {
+    echo -e "${YELLOW}=== 修复无效配置 ===${NC}"
+    
+    local fixed_count=0
+    
+    for cfg in /root/*.json; do
+        [ -f "$cfg" ] || continue
+        local config_name=$(basename "$cfg")
+        
+        # 检查JSON格式
+        if ! jq empty "$cfg" 2>/dev/null; then
+            echo -e "${YELLOW}尝试修复JSON格式: $config_name${NC}"
+            
+            # 尝试修复常见的JSON格式问题
+            local temp_file="/tmp/fixed_${config_name}"
+            if sed 's/,}/}/g; s/,]/]/g' "$cfg" > "$temp_file" 2>/dev/null; then
+                if jq empty "$temp_file" 2>/dev/null; then
+                    mv "$temp_file" "$cfg"
+                    echo -e "${GREEN}  ✓ JSON格式已修复${NC}"
+                    ((fixed_count++))
+                else
+                    rm -f "$temp_file"
+                    echo -e "${RED}  ✗ 无法修复JSON格式${NC}"
+                fi
+            fi
+        fi
+        
+        # 检查并修复端口范围问题
+        local server=$(jq -r '.server' "$cfg" 2>/dev/null)
+        if [[ "$server" =~ ^[^:]+:([0-9]+)$ ]]; then
+            local port="${BASH_REMATCH[1]}"
+            if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+                echo -e "${YELLOW}修复端口范围: $config_name${NC}"
+                local new_port=$((20000 + RANDOM % 40000))
+                jq --arg new_server "$(echo "$server" | cut -d: -f1):$new_port" '.server = $new_server' "$cfg" > "${cfg}.tmp" && mv "${cfg}.tmp" "$cfg"
+                echo -e "${GREEN}  ✓ 端口已修复为: $new_port${NC}"
+                ((fixed_count++))
+            fi
+        fi
+        
+        # 检查并修复带宽格式
+        local up_bw=$(jq -r '.bandwidth.up' "$cfg" 2>/dev/null)
+        if [[ ! "$up_bw" =~ ^[0-9]+\s*(mbps|gbps|kbps)$ ]]; then
+            echo -e "${YELLOW}修复上行带宽格式: $config_name${NC}"
+            jq '.bandwidth.up = "185 mbps"' "$cfg" > "${cfg}.tmp" && mv "${cfg}.tmp" "$cfg"
+            echo -e "${GREEN}  ✓ 上行带宽已修复为: 185 mbps${NC}"
+            ((fixed_count++))
+        fi
+        
+        local down_bw=$(jq -r '.bandwidth.down' "$cfg" 2>/dev/null)
+        if [[ ! "$down_bw" =~ ^[0-9]+\s*(mbps|gbps|kbps)$ ]]; then
+            echo -e "${YELLOW}修复下行带宽格式: $config_name${NC}"
+            jq '.bandwidth.down = "185 mbps"' "$cfg" > "${cfg}.tmp" && mv "${cfg}.tmp" "$cfg"
+            echo -e "${GREEN}  ✓ 下行带宽已修复为: 185 mbps${NC}"
+            ((fixed_count++))
+        fi
+    done
+    
+    if [ $fixed_count -gt 0 ]; then
+        echo -e "\n${GREEN}修复完成！共修复 $fixed_count 个问题${NC}"
+        echo -e "${YELLOW}建议重新验证配置${NC}"
+    else
+        echo -e "\n${YELLOW}没有需要修复的问题${NC}"
+    fi
+}
+
+# 备份和恢复配置
+backup_restore_configs() {
+    echo -e "${YELLOW}=== 配置备份和恢复 ===${NC}"
+    echo "1. 备份所有配置"
+    echo "2. 恢复配置"
+    echo "3. 查看备份列表"
+    echo "4. 删除备份"
+    read -p "请选择操作 [1-4]: " backup_choice
+    
+    case "$backup_choice" in
+        1)
+            backup_all_configs
+            ;;
+        2)
+            restore_configs
+            ;;
+        3)
+            list_backups
+            ;;
+        4)
+            delete_backup
+            ;;
+        *)
+            echo -e "${RED}无效选择${NC}"
+            return
+            ;;
+    esac
+}
+
+# 备份所有配置
+backup_all_configs() {
+    echo -e "${YELLOW}正在创建配置备份...${NC}"
+    
+    # 创建备份目录
+    local backup_dir="/root/hysteria_backups"
+    mkdir -p "$backup_dir"
+    
+    # 生成备份文件名
+    local timestamp=$(date +%Y%m%d_%H%M%S)
+    local backup_file="hysteria_configs_backup_${timestamp}.tar.gz"
+    local backup_path="$backup_dir/$backup_file"
+    
+    # 检查是否有配置文件
+    if ! ls /root/*.json 2>/dev/null | grep -q .; then
+        echo -e "${YELLOW}没有找到客户端配置文件${NC}"
+        return
+    fi
+    
+    # 创建临时目录
+    local temp_dir="/tmp/hysteria_backup_$$"
+    mkdir -p "$temp_dir"
+    
+    # 复制配置文件
+    local config_count=0
+    for cfg in /root/*.json; do
+        if [ -f "$cfg" ]; then
+            cp "$cfg" "$temp_dir/"
+            config_count=$((config_count + 1))
+        fi
+    done
+    
+    # 创建备份信息文件
+    cat > "$temp_dir/backup_info.txt" << EOF
+Hysteria 配置备份信息
+备份时间: $(date)
+配置文件数量: $config_count
+系统信息: $(uname -a)
+Hysteria版本: $(/usr/local/bin/hysteria version 2>/dev/null | head -1 || echo "未知")
+
+配置文件列表:
+$(ls "$temp_dir"/*.json 2>/dev/null | xargs -n1 basename | sort)
+
+恢复说明:
+1. 解压此备份文件
+2. 将配置文件复制到 /root/ 目录
+3. 使用客户端管理功能启动配置
+EOF
+    
+    # 创建压缩包
+    cd "$temp_dir"
+    tar -czf "$backup_path" ./*
+    cd - > /dev/null
+    
+    # 清理临时目录
+    rm -rf "$temp_dir"
+    
+    # 显示备份信息
+    local backup_size=$(du -h "$backup_path" | cut -f1)
+    echo -e "${GREEN}✓ 备份创建成功！${NC}"
+    echo -e "${GREEN}  - 备份文件: $backup_path${NC}"
+    echo -e "${GREEN}  - 文件大小: $backup_size${NC}"
+    echo -e "${GREEN}  - 配置文件: $config_count 个${NC}"
+}
+
+# 恢复配置
+restore_configs() {
+    echo -e "${YELLOW}=== 恢复配置 ===${NC}"
+    
+    # 检查备份目录
+    local backup_dir="/root/hysteria_backups"
+    if [ ! -d "$backup_dir" ]; then
+        echo -e "${YELLOW}备份目录不存在${NC}"
+        return
+    fi
+    
+    # 显示可用备份
+    local backups=()
+    local count=0
+    for backup in "$backup_dir"/hysteria_configs_backup_*.tar.gz; do
+        if [ -f "$backup" ]; then
+            count=$((count + 1))
+            backups+=("$backup")
+            echo -e "${GREEN}${count}.${NC} $(basename "$backup") ($(du -h "$backup" | cut -f1))"
+        fi
+    done
+    
+    if [ $count -eq 0 ]; then
+        echo -e "${YELLOW}没有找到备份文件${NC}"
+        return
+    fi
+    
+    read -p "请选择要恢复的备份 [1-$count]: " choice
+    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt $count ]; then
+        echo -e "${RED}无效选择${NC}"
+        return
+    fi
+    
+    local selected_backup="${backups[$((choice-1))]}"
+    local backup_name=$(basename "$selected_backup")
+    
+    echo -e "${YELLOW}正在恢复备份: $backup_name${NC}"
+    
+    # 询问是否备份现有配置
+    echo -e "${YELLOW}是否备份现有配置？(y/N): ${NC}"
+    read -p "" backup_existing
+    if [[ "$backup_existing" =~ ^[Yy]$ ]]; then
+        backup_all_configs
+    fi
+    
+    # 创建临时目录
+    local temp_dir="/tmp/hysteria_restore_$$"
+    mkdir -p "$temp_dir"
+    
+    # 解压备份
+    if ! tar -xzf "$selected_backup" -C "$temp_dir"; then
+        echo -e "${RED}解压备份文件失败${NC}"
+        rm -rf "$temp_dir"
+        return
+    fi
+    
+    # 停止现有客户端
+    echo -e "${YELLOW}正在停止现有客户端...${NC}"
+    pkill -f "hysteria.*client" 2>/dev/null || true
+    
+    # 备份现有配置
+    if ls /root/*.json 2>/dev/null | grep -q .; then
+        mkdir -p /root/config_backup_$(date +%Y%m%d_%H%M%S)
+        mv /root/*.json /root/config_backup_$(date +%Y%m%d_%H%M%S)/ 2>/dev/null || true
+    fi
+    
+    # 恢复配置文件
+    local restored_count=0
+    for cfg in "$temp_dir"/*.json; do
+        if [ -f "$cfg" ]; then
+            local config_name=$(basename "$cfg")
+            cp "$cfg" "/root/$config_name"
+            echo -e "${GREEN}✓ 已恢复: $config_name${NC}"
+            restored_count=$((restored_count + 1))
+        fi
+    done
+    
+    # 清理临时目录
+    rm -rf "$temp_dir"
+    
+    echo -e "${GREEN}✓ 配置恢复完成！${NC}"
+    echo -e "${GREEN}  - 恢复配置: $restored_count 个${NC}"
+    
+    # 询问是否启动恢复的配置
+    if [ $restored_count -gt 0 ]; then
+        echo -e "${YELLOW}是否启动恢复的配置？(y/N): ${NC}"
+        read -p "" start_choice
+        if [[ "$start_choice" =~ ^[Yy]$ ]]; then
+            auto_systemd_enable_all
+        fi
+    fi
+}
+
+# 查看备份列表
+list_backups() {
+    echo -e "${YELLOW}=== 备份列表 ===${NC}"
+    
+    local backup_dir="/root/hysteria_backups"
+    if [ ! -d "$backup_dir" ]; then
+        echo -e "${YELLOW}备份目录不存在${NC}"
+        return
+    fi
+    
+    local count=0
+    for backup in "$backup_dir"/hysteria_configs_backup_*.tar.gz; do
+        if [ -f "$backup" ]; then
+            count=$((count + 1))
+            local backup_name=$(basename "$backup")
+            local backup_size=$(du -h "$backup" | cut -f1)
+            local backup_time=$(stat -c %y "$backup" | cut -d' ' -f1,2)
+            
+            echo -e "${GREEN}${count}.${NC} $backup_name"
+            echo -e "   大小: $backup_size"
+            echo -e "   时间: $backup_time"
+            echo "----------------------------------------"
+        fi
+    done
+    
+    if [ $count -eq 0 ]; then
+        echo -e "${YELLOW}没有找到备份文件${NC}"
+    else
+        echo -e "${GREEN}总共 $count 个备份文件${NC}"
+    fi
+}
+
+# 删除备份
+delete_backup() {
+    echo -e "${YELLOW}=== 删除备份 ===${NC}"
+    
+    local backup_dir="/root/hysteria_backups"
+    if [ ! -d "$backup_dir" ]; then
+        echo -e "${YELLOW}备份目录不存在${NC}"
+        return
+    fi
+    
+    # 显示可用备份
+    local backups=()
+    local count=0
+    for backup in "$backup_dir"/hysteria_configs_backup_*.tar.gz; do
+        if [ -f "$backup" ]; then
+            count=$((count + 1))
+            backups+=("$backup")
+            echo -e "${GREEN}${count}.${NC} $(basename "$backup") ($(du -h "$backup" | cut -f1))"
+        fi
+    done
+    
+    if [ $count -eq 0 ]; then
+        echo -e "${YELLOW}没有找到备份文件${NC}"
+        return
+    fi
+    
+    echo -e "${YELLOW}选择要删除的备份，或输入 'all' 删除所有备份:${NC}"
+    read -p "请选择 [1-$count 或 all]: " choice
+    
+    if [ "$choice" = "all" ]; then
+        echo -e "${YELLOW}确认删除所有备份？(y/N): ${NC}"
+        read -p "" confirm
+        if [[ "$confirm" =~ ^[Yy]$ ]]; then
+            rm -f "$backup_dir"/hysteria_configs_backup_*.tar.gz
+            echo -e "${GREEN}✓ 已删除所有备份${NC}"
+        else
+            echo -e "${YELLOW}取消删除操作${NC}"
+        fi
+    elif [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le $count ]; then
+        local selected_backup="${backups[$((choice-1))]}"
+        local backup_name=$(basename "$selected_backup")
+        
+        echo -e "${YELLOW}确认删除备份: $backup_name？(y/N): ${NC}"
+        read -p "" confirm
+        if [[ "$confirm" =~ ^[Yy]$ ]]; then
+            rm -f "$selected_backup"
+            echo -e "${GREEN}✓ 已删除备份: $backup_name${NC}"
+        else
+            echo -e "${YELLOW}取消删除操作${NC}"
+        fi
+    else
+        echo -e "${RED}无效选择${NC}"
+    fi
+}
+
+# 生成使用说明
+generate_usage_guide() {
+    echo -e "${YELLOW}正在生成详细使用说明...${NC}"
+    
+    # 创建说明目录
+    mkdir -p /root/hysteria_guide
+    
+    # 生成客户端使用说明
+    cat > "/root/hysteria_guide/客户端使用说明.md" << 'EOF'
+# Hysteria 客户端使用说明
+
+## 安装客户端
+
+### Linux
+```bash
+# 下载最新版本
+wget https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64
+chmod +x hysteria-linux-amd64
+sudo mv hysteria-linux-amd64 /usr/local/bin/hysteria
+
+# 或者使用官方安装脚本
+curl -fsSL https://get.hy2.dev/ | bash
+```
+
+### Windows
+1. 从 [GitHub Releases](https://github.com/apernet/hysteria/releases) 下载 Windows 版本
+2. 解压到任意目录
+3. 将目录添加到系统 PATH
+
+### macOS
+```bash
+# 使用 Homebrew
+brew install hysteria
+
+# 或者手动下载
+wget https://github.com/apernet/hysteria/releases/latest/download/hysteria-darwin-amd64
+chmod +x hysteria-darwin-amd64
+sudo mv hysteria-darwin-amd64 /usr/local/bin/hysteria
+```
+
+## 使用方法
+
+### 单个配置启动
+```bash
+hysteria client -c 配置文件.json
+```
+
+### 后台运行
+```bash
+nohup hysteria client -c 配置文件.json > /dev/null 2>&1 &
+```
+
+### 批量启动
+```bash
+#!/bin/bash
+for cfg in *.json; do
+    if [ -f "$cfg" ]; then
+        echo "启动配置: $cfg"
+        hysteria client -c "$cfg" &
+    fi
+done
+```
+
+## 配置说明
+
+配置文件包含以下主要信息：
+- `server`: 服务器地址和端口
+- `auth`: 认证密码
+- `http.listen`: HTTP代理监听端口
+- `socks5.listen`: SOCKS5代理监听端口
+
+## 代理使用
+
+启动客户端后，可以使用以下代理：
+- HTTP代理: 127.0.0.1:HTTP端口
+- SOCKS5代理: 127.0.0.1:SOCKS5端口
+
+## 故障排除
+
+1. **连接失败**
+   - 检查服务器地址和端口是否正确
+   - 确认服务器防火墙设置
+   - 验证认证密码
+
+2. **端口冲突**
+   - 确保本地端口未被占用
+   - 修改配置文件中的监听端口
+
+3. **性能问题**
+   - 检查网络环境
+   - 调整带宽限制设置
+EOF
+
+    # 生成服务端管理说明
+    cat > "/root/hysteria_guide/服务端管理说明.md" << 'EOF'
+# Hysteria 服务端管理说明
+
+## 管理命令
+
+### 启动管理面板
+```bash
+h2
+```
+
+### 服务端管理
+```bash
+# 进入服务端管理
+cd /root/hysteria
+bash server.sh
+```
+
+### 客户端管理
+```bash
+# 进入客户端管理
+cd /root/hysteria
+bash client.sh
+```
+
+## 常用操作
+
+### 查看服务状态
+```bash
+systemctl status hysteria-server@端口号.service
+```
+
+### 启动/停止服务
+```bash
+systemctl start hysteria-server@端口号.service
+systemctl stop hysteria-server@端口号.service
+systemctl restart hysteria-server@端口号.service
+```
+
+### 查看日志
+```bash
+journalctl -u hysteria-server@端口号.service -f
+```
+
+## 配置文件位置
+
+- 服务端配置: `/etc/hysteria/config_端口号.yaml`
+- 客户端配置: `/root/域名_端口号.json`
+
+## 批量操作
+
+### 批量启动所有服务
+```bash
+systemctl start hysteria-server@*
+```
+
+### 批量停止所有服务
+```bash
+systemctl stop hysteria-server@*
+```
+
+### 查看所有服务状态
+```bash
+systemctl status hysteria-server@* --no-pager
+```
+EOF
+
+    # 生成系统优化说明
+    cat > "/root/hysteria_guide/系统优化说明.md" << 'EOF'
+# Hysteria 系统优化说明
+
+## 自动优化
+
+使用管理面板的系统优化功能：
+```bash
+h2
+# 选择 "系统优化"
+```
+
+## 手动优化
+
+### 内核参数优化
+```bash
+# 编辑 sysctl 配置
+cat >> /etc/sysctl.conf << EOF
+net.core.rmem_max = 268435456
+net.core.wmem_max = 268435456
+net.core.rmem_default = 524288
+net.core.wmem_default = 524288
+net.core.netdev_max_backlog = 10000
+net.core.somaxconn = 131072
+net.ipv4.tcp_congestion_control = bbr
+net.ipv4.tcp_fastopen = 3
+EOF
+
+# 应用配置
+sysctl -p
+```
+
+### 文件描述符限制
+```bash
+# 编辑 limits 配置
+cat >> /etc/security/limits.conf << EOF
+* soft nofile 1000000
+* hard nofile 1000000
+root soft nofile 1000000
+root hard nofile 1000000
+EOF
+```
+
+### 启用 BBR
+```bash
+# 加载 BBR 模块
+echo "tcp_bbr" | tee /etc/modules-load.d/bbr.conf
+modprobe tcp_bbr
+
+# 设置拥塞控制
+echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+sysctl -p
+```
+
+## 性能监控
+
+### 查看系统资源
+```bash
+# CPU 和内存使用
+top
+
+# 网络连接
+ss -tuln
+
+# 文件描述符
+lsof | wc -l
+```
+
+### 查看 Hysteria 进程
+```bash
+# 查看所有 Hysteria 进程
+ps aux | grep hysteria
+
+# 查看进程数量
+pgrep -f hysteria | wc -l
+```
+EOF
+
+    echo -e "${GREEN}✓ 使用说明已生成到: /root/hysteria_guide/${NC}"
+    echo -e "${GREEN}  - 客户端使用说明.md${NC}"
+    echo -e "${GREEN}  - 服务端管理说明.md${NC}"
+    echo -e "${GREEN}  - 系统优化说明.md${NC}"
 }
 
 
@@ -2910,8 +4579,12 @@ while true; do
     echo "5. 删除单个/全部客户端配置和实例"
     echo "6. 展示所有配置"
     echo "7. 启动剩余未启动的实例"
+    echo "8. 导出客户端配置"
+    echo "9. 批量生成客户端配置"
+    echo "10. 验证客户端配置"
+    echo "11. 备份和恢复配置"
     echo "0. 退出"
-    read -t 60 -p "请选择 [0-7]: " choice || exit 0
+    read -t 60 -p "请选择 [0-11]: " choice || exit 0
 
     case $choice in
         1) auto_systemd_enable_all ;;
@@ -2921,6 +4594,10 @@ while true; do
         5) delete_config ;;
         6) list_configs ;;
         7) start_remaining_instances ;;
+        8) export_client_configs ;;
+        9) generate_client_configs_batch ;;
+        10) validate_client_configs ;;
+        11) backup_restore_configs ;;
         0) exit ;;
         *) echo -e "${RED}无效选择${NC}" ;;
     esac
@@ -3427,6 +5104,17 @@ main() {
         # 显示版本信息
         local version=$(/usr/local/bin/hysteria version 2>/dev/null | head -1)
         printf "%bHysteria版本: %s%b\n" "${GREEN}" "$version" "${NC}"
+        
+        # 显示完善的功能
+        printf "\n%b✓ 客户端配置生成功能已完善：%b\n" "${GREEN}" "${NC}"
+        printf "  - 修复了客户端配置监听端口冲突问题\n"
+        printf "  - 添加了客户端配置导出功能（单个/批量/压缩包）\n"
+        printf "  - 添加了批量生成客户端配置功能\n"
+        printf "  - 添加了客户端配置验证和修复功能\n"
+        printf "  - 添加了配置统计和详细信息显示\n"
+        printf "  - 添加了配置备份和恢复功能\n"
+        printf "  - 添加了详细的使用说明生成功能\n"
+        printf "  - 优化了配置管理流程\n"
     else
         printf "\n%b✗ 安装验证失败，请检查错误信息%b\n" "${RED}" "${NC}"
         exit 1
