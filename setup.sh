@@ -110,10 +110,11 @@ main_menu() {
         echo "5. 检查更新"
         echo "6. 运行状态"
         echo "7. 完全卸载"
+        echo "8. 彻底清理（清理所有端口占用和配置）"
         echo "0. 退出脚本"
         printf "%b====================================%b\n" "${GREEN}" "${NC}"
         
-        read -t 60 -p "请选择 [0-7]: " choice || {
+        read -t 60 -p "请选择 [0-8]: " choice || {
             printf "\n%b操作超时，退出脚本%b\n" "${YELLOW}" "${NC}"
             exit 1
         }
@@ -133,6 +134,22 @@ main_menu() {
                 read -t 30 -n 1 -s -r -p "按任意键继续..."
                 ;;
             7) bash /root/hysteria/config.sh uninstall ;;
+            8) 
+                echo -e "${RED}=== 彻底清理确认 ===${NC}"
+                echo -e "${YELLOW}警告：此操作将彻底删除所有Hysteria相关内容${NC}"
+                echo -e "${YELLOW}包括：${NC}"
+                echo -e "${YELLOW}- 所有Hysteria进程和服务${NC}"
+                echo -e "${YELLOW}- 所有配置文件${NC}"
+                echo -e "${YELLOW}- 所有端口占用${NC}"
+                echo -e "${YELLOW}- 所有相关文件${NC}"
+                read -p "确认要彻底清理吗？(输入 'YES' 确认): " confirm
+                if [ "$confirm" = "YES" ]; then
+                    cleanup_old_installation
+                else
+                    echo -e "${YELLOW}操作已取消${NC}"
+                fi
+                read -t 30 -n 1 -s -r -p "按任意键继续..."
+                ;;
             0) exit 0 ;;
             *)
                 printf "%b无效选择%b\n" "${RED}" "${NC}"
@@ -4852,38 +4869,183 @@ chmod +x /usr/local/bin/h2
     printf "%b所有模块脚本创建完成%b\n" "${GREEN}" "${NC}"
 }
 
-# 清理旧的安装
+# 彻底清理所有Hysteria相关内容和端口占用
 cleanup_old_installation() {
-    printf "%b清理旧的安装...%b\n" "${YELLOW}" "${NC}"
+    printf "%b开始彻底清理所有Hysteria相关内容...%b\n" "${YELLOW}" "${NC}"
     
-    # 停止所有hysteria服务
+    echo "=== 第一步：停止所有服务 ==="
+    
+    # 停止所有hysteria相关服务
+    printf "%b停止所有Hysteria服务...%b\n" "${YELLOW}" "${NC}"
     systemctl stop hysteria-server 2>/dev/null
     systemctl stop hysteria-server@* 2>/dev/null
+    systemctl stop hysteria-client-manager 2>/dev/null
+    systemctl stop hysteria-server-shard-manager 2>/dev/null
+    systemctl stop hysteria-client-shard-manager 2>/dev/null
+    systemctl stop hysteria-monitor 2>/dev/null
+    systemctl stop hysteriaclient@* 2>/dev/null
+    
+    # 禁用所有hysteria服务
+    printf "%b禁用所有Hysteria服务...%b\n" "${YELLOW}" "${NC}"
     systemctl disable hysteria-server 2>/dev/null
     systemctl disable hysteria-server@* 2>/dev/null
+    systemctl disable hysteria-client-manager 2>/dev/null
+    systemctl disable hysteria-server-shard-manager 2>/dev/null
+    systemctl disable hysteria-client-shard-manager 2>/dev/null
+    systemctl disable hysteria-monitor 2>/dev/null
+    systemctl disable hysteriaclient@* 2>/dev/null
     
-    # 杀死所有hysteria进程
+    echo "=== 第二步：杀死所有相关进程 ==="
+    
+    # 杀死所有hysteria相关进程
+    printf "%b杀死所有Hysteria进程...%b\n" "${YELLOW}" "${NC}"
     pkill -f hysteria 2>/dev/null
+    pkill -f "hysteria.*server" 2>/dev/null
+    pkill -f "hysteria.*client" 2>/dev/null
     
-    # 清理文件和目录
+    # 等待进程完全停止
+    sleep 2
+    
+    # 强制杀死残留进程
+    pkill -9 -f hysteria 2>/dev/null
+    
+    echo "=== 第三步：清理所有配置文件 ==="
+    
+    # 清理服务端配置文件
+    printf "%b清理服务端配置文件...%b\n" "${YELLOW}" "${NC}"
     rm -rf /etc/hysteria
-    rm -rf /root/H2
-    rm -rf /root/hysteria
-    rm -f /usr/local/bin/hysteria
-    rm -f /usr/local/bin/h2
-    rm -f /etc/systemd/system/hysteria-server.service
-    rm -f /etc/systemd/system/hysteria-server@*.service
-    rm -f /etc/sysctl.d/99-hysteria.conf
-    rm -f /etc/security/limits.d/99-hysteria.conf
-    rm -f /root/{main,server,client,config}.sh
+    rm -f /etc/hysteria/config_*.yaml
+    rm -f /etc/hysteria/server_*.crt
+    rm -f /etc/hysteria/server_*.key
     
     # 清理客户端配置文件
+    printf "%b清理客户端配置文件...%b\n" "${YELLOW}" "${NC}"
     rm -f /root/*.json
+    rm -f /root/hysteria/*.json
+    
+    # 清理脚本文件
+    printf "%b清理脚本文件...%b\n" "${YELLOW}" "${NC}"
+    rm -rf /root/H2
+    rm -rf /root/hysteria
+    rm -f /root/main.sh
+    rm -f /root/server.sh
+    rm -f /root/client.sh
+    rm -f /root/config.sh
+    
+    # 清理二进制文件
+    printf "%b清理二进制文件...%b\n" "${YELLOW}" "${NC}"
+    rm -f /usr/local/bin/hysteria
+    rm -f /usr/local/bin/h2
+    rm -f /usr/local/bin/hysteria-server-manager.sh
+    rm -f /usr/local/bin/hysteria-client-manager.sh
+    rm -f /usr/local/bin/hysteria-server-shard-manager.sh
+    rm -f /usr/local/bin/hysteria-client-shard-manager.sh
+    rm -f /usr/local/bin/hysteria-monitor.sh
+    
+    echo "=== 第四步：清理Systemd服务文件 ==="
+    
+    # 清理systemd服务文件
+    printf "%b清理Systemd服务文件...%b\n" "${YELLOW}" "${NC}"
+    rm -f /etc/systemd/system/hysteria-server.service
+    rm -f /etc/systemd/system/hysteria-server@*.service
+    rm -f /etc/systemd/system/hysteria-client-manager.service
+    rm -f /etc/systemd/system/hysteria-server-shard-manager.service
+    rm -f /etc/systemd/system/hysteria-client-shard-manager.service
+    rm -f /etc/systemd/system/hysteria-monitor.service
+    rm -f /etc/systemd/system/hysteriaclient@.service
+    
+    echo "=== 第五步：清理系统配置文件 ==="
+    
+    # 清理系统配置文件
+    printf "%b清理系统配置文件...%b\n" "${YELLOW}" "${NC}"
+    rm -f /etc/sysctl.d/99-hysteria.conf
+    rm -f /etc/security/limits.d/99-hysteria.conf
+    
+    # 清理sysctl配置中的hysteria相关设置
+    if [ -f /etc/sysctl.conf ]; then
+        printf "%b清理sysctl配置中的Hysteria设置...%b\n" "${YELLOW}" "${NC}"
+        sed -i '/# Hysteria/d' /etc/sysctl.conf
+        sed -i '/net.core.rmem_max = 268435456/d' /etc/sysctl.conf
+        sed -i '/net.core.wmem_max = 268435456/d' /etc/sysctl.conf
+        sed -i '/fs.file-max = 4194304/d' /etc/sysctl.conf
+    fi
+    
+    echo "=== 第六步：清理端口占用 ==="
+    
+    # 查找并杀死占用常用Hysteria端口的进程
+    printf "%b清理端口占用...%b\n" "${YELLOW}" "${NC}"
+    
+    # 检查常用端口范围（8000-9999）
+    for port in $(seq 8000 9999); do
+        if command -v ss >/dev/null 2>&1; then
+            pid=$(ss -lntp | grep ":$port " | awk '{print $7}' | cut -d',' -f2 | cut -d'=' -f2 | head -1)
+        elif command -v netstat >/dev/null 2>&1; then
+            pid=$(netstat -lntp | grep ":$port " | awk '{print $7}' | cut -d'/' -f1 | head -1)
+        else
+            break
+        fi
+        
+        if [ -n "$pid" ] && [ "$pid" != "-" ]; then
+            printf "%b发现端口 %d 被进程 %s 占用，正在清理...%b\n" "${YELLOW}" "$port" "$pid" "${NC}"
+            kill -9 "$pid" 2>/dev/null
+        fi
+    done
+    
+    echo "=== 第七步：清理日志文件 ==="
+    
+    # 清理日志文件
+    printf "%b清理日志文件...%b\n" "${YELLOW}" "${NC}"
+    rm -f /var/log/hysteria*.log
+    rm -f /var/log/hysteria*.out
+    journalctl --vacuum-time=1s 2>/dev/null
+    
+    echo "=== 第八步：清理临时文件 ==="
+    
+    # 清理临时文件
+    printf "%b清理临时文件...%b\n" "${YELLOW}" "${NC}"
+    rm -f /tmp/hysteria*
+    rm -f /var/tmp/hysteria*
+    
+    echo "=== 第九步：重新加载系统服务 ==="
     
     # 重新加载systemd
+    printf "%b重新加载Systemd...%b\n" "${YELLOW}" "${NC}"
     systemctl daemon-reload
     
-    printf "%b清理完成%b\n" "${GREEN}" "${NC}"
+    # 重置systemd
+    systemctl reset-failed 2>/dev/null
+    
+    echo "=== 第十步：验证清理结果 ==="
+    
+    # 验证清理结果
+    printf "%b验证清理结果...%b\n" "${YELLOW}" "${NC}"
+    
+    # 检查是否还有hysteria进程
+    if pgrep -f hysteria >/dev/null; then
+        printf "%b⚠ 警告：仍有Hysteria进程在运行%b\n" "${RED}" "${NC}"
+        pgrep -f hysteria
+    else
+        printf "%b✓ 所有Hysteria进程已清理%b\n" "${GREEN}" "${NC}"
+    fi
+    
+    # 检查是否还有hysteria服务
+    if systemctl list-units --type=service | grep -q hysteria; then
+        printf "%b⚠ 警告：仍有Hysteria服务存在%b\n" "${RED}" "${NC}"
+        systemctl list-units --type=service | grep hysteria
+    else
+        printf "%b✓ 所有Hysteria服务已清理%b\n" "${GREEN}" "${NC}"
+    fi
+    
+    # 检查是否还有hysteria文件
+    if find /etc /root /usr/local/bin -name "*hysteria*" 2>/dev/null | grep -q .; then
+        printf "%b⚠ 警告：仍有Hysteria文件存在%b\n" "${RED}" "${NC}"
+        find /etc /root /usr/local/bin -name "*hysteria*" 2>/dev/null | head -10
+    else
+        printf "%b✓ 所有Hysteria文件已清理%b\n" "${GREEN}" "${NC}"
+    fi
+    
+    printf "%b✓ 彻底清理完成！%b\n" "${GREEN}" "${NC}"
+    printf "%b所有Hysteria相关内容、端口占用和配置已完全清除%b\n" "${GREEN}" "${NC}"
 }
 
 # 安装基础依赖
@@ -5129,7 +5291,19 @@ main() {
     printf "%b版本: ${VERSION}%b\n" "${GREEN}" "${NC}"
     printf "%b============================================%b\n" "${GREEN}" "${NC}"
     
-    cleanup_old_installation
+    # 检查是否需要彻底清理
+    if pgrep -f hysteria >/dev/null || [ -d "/etc/hysteria" ] || [ -f "/usr/local/bin/hysteria" ]; then
+        echo -e "${YELLOW}检测到系统中存在Hysteria相关内容${NC}"
+        echo -e "${YELLOW}建议在安装前进行彻底清理以确保干净安装${NC}"
+        read -p "是否在安装前进行彻底清理？(y/N): " cleanup_choice
+        if [[ "$cleanup_choice" =~ ^[Yy]$ ]]; then
+            echo -e "${YELLOW}开始彻底清理...${NC}"
+            cleanup_old_installation
+        else
+            echo -e "${YELLOW}跳过彻底清理，继续安装...${NC}"
+        fi
+    fi
+    
     install_base || exit 1
     install_hysteria || exit 1
     create_all_scripts
