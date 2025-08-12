@@ -74,7 +74,7 @@ main_menu() {
             2) bash ./server.sh ;;
             3) bash ./client.sh ;;
             4) bash ./config.sh optimize ;;
-            5) optimize_for_massive_configs ;;
+            5) bash ./setup.sh massive_optimize ;;
             6) bash ./config.sh update ;;
             7)
                 echo -e "${YELLOW}服务端状态:${NC}"
@@ -2814,5 +2814,19 @@ main() {
         exit 1
     fi
 }
+
+# 参数处理
+if [ $# -gt 0 ]; then
+    case "$1" in
+        "massive_optimize")
+            optimize_for_massive_configs
+            exit 0
+            ;;
+        *)
+            echo "未知参数: $1"
+            exit 1
+            ;;
+    esac
+fi
 
 main
