@@ -69,11 +69,11 @@ main_menu() {
         }
         
         case $choice in
-            1) bash ./config.sh install ;;
-            2) bash ./server.sh ;;
-            3) bash ./client.sh ;;
-            4) bash ./config.sh optimize ;;
-            5) bash ./config.sh update ;;
+            1) bash /root/hysteria/config.sh install ;;
+            2) bash /root/hysteria/server.sh ;;
+            3) bash /root/hysteria/client.sh ;;
+            4) bash /root/hysteria/config.sh optimize ;;
+            5) bash /root/hysteria/config.sh update ;;
             6)
                 echo -e "${YELLOW}服务端状态:${NC}"
                 systemctl status hysteria-server@* --no-pager 2>/dev/null || echo "没有运行的服务端实例"
@@ -82,7 +82,7 @@ main_menu() {
                 systemctl status hysteriaclient@* --no-pager 2>/dev/null || echo "没有运行的客户端实例"
                 read -t 30 -n 1 -s -r -p "按任意键继续..."
                 ;;
-            7) bash ./config.sh uninstall ;;
+            7) bash /root/hysteria/config.sh uninstall ;;
             0) exit 0 ;;
             *)
                 printf "%b无效选择%b\n" "${RED}" "${NC}"
