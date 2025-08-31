@@ -221,6 +221,97 @@ EOF
     fi
 }
 
+# 创建客户端统一服务
+create_client_unified_service() {
+    local unit_file="${SYSTEMD_DIR}/hysteria-client-manager.service"
+    local script_file="/usr/local/bin/hysteria-client-manager.sh"
+    
+    # 创建启动脚本
+    cat >"$script_file" <<'EOF'
+#!/bin/bash
+# Hysteria Client Manager Script
+
+CONFIG_DIR="/root"
+HYSTERIA_BIN="/usr/local/bin/hysteria"
+PID_FILE="/var/run/hysteria-client-manager.pid"
+
+# 创建PID文件目录
+mkdir -p "$(dirname "$PID_FILE")"
+
+# 停止已存在的进程
+if [ -f "$PID_FILE" ]; then
+    pkill -F "$PID_FILE" 2>/dev/null || true
+    rm -f "$PID_FILE"
+fi
+
+# 启动所有配置文件（优化性能）
+pids=()
+config_count=0
+
+for cfg in "$CONFIG_DIR"/*.json; do
+    if [ -f "$cfg" ]; then
+        config_count=$((config_count + 1))
+        
+        echo "Starting client with config: $cfg (${config_count})"
+        "$HYSTERIA_BIN" client -c "$cfg" &
+        pids+=($!)
+        
+        # 减少延迟，提高启动速度
+        sleep 0.1
+    fi
+done
+
+echo "总共启动了 $config_count 个客户端配置"
+
+# 保存PID到文件
+echo "${pids[@]}" > "$PID_FILE"
+
+# 等待所有进程
+wait
+EOF
+    
+    chmod +x "$script_file"
+    
+    # 创建统一服务文件
+    cat >"$unit_file" <<EOF
+[Unit]
+Description=Hysteria2 Client Manager - Manages all client configurations
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=$script_file
+Restart=always
+RestartSec=3
+User=root
+PIDFile=/var/run/hysteria-client-manager.pid
+# 资源限制优化
+MemoryMax=2G
+CPUQuota=50%
+Nice=5
+IOSchedulingClass=1
+IOSchedulingPriority=4
+# 进程管理
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    # 重新加载systemd配置
+    systemctl daemon-reload
+    
+    # 启用服务
+    if systemctl enable "hysteria-client-manager.service" >/dev/null 2>&1; then
+        echo -e "${GREEN}统一服务 hysteria-client-manager.service 已启用${NC}"
+    else
+        echo -e "${RED}启用统一服务 hysteria-client-manager.service 失败${NC}"
+        return 1
+    fi
+}
+
 # 创建服务端统一服务
 create_server_unified_service() {
     local unit_file="${SYSTEMD_DIR}/hysteria-server-manager.service"
@@ -424,9 +515,9 @@ generate_instances_batch() {
         config_file="$CONFIG_DIR/config_${server_port}.yaml"
 
         if [[ "$deploy_mode" == "1" ]]; then
-            # 双端同机模式：服务端直接提供HTTP/SOCKS5代理
+            # 双端同机模式：服务端监听本地回环，转发到代理出口
             cat >"$config_file" <<EOF
-listen: :$server_port
+listen: 127.0.0.1:$server_port
 
 tls:
   cert: $crt
@@ -451,16 +542,15 @@ bandwidth:
   up: ${up_bw} mbps
   down: ${down_bw} mbps
 
-http:
-  listen: 0.0.0.0:$server_port
-  username: $proxy_username
-  password: $proxy_password
-  realm: $http_realm
+outbounds:
+  - name: my_proxy
+    type: http
+    http:
+      url: $proxy_url
 
-socks5:
-  listen: 0.0.0.0:$server_port
-  username: $proxy_username
-  password: $proxy_password
+acl:
+  inline:
+    - my_proxy(all)
 EOF
         else
             # 双端不同机模式：服务端只提供Hysteria协议
@@ -506,7 +596,52 @@ EOF
         ports_to_create+=("$server_port")
         configs_to_create+=("$config_file")
 
-        if [[ "$deploy_mode" == "2" ]]; then
+        if [[ "$deploy_mode" == "1" ]]; then
+            # 双端同机模式：生成客户端配置文件，监听外部端口
+            local client_cfg="/root/${domain}_${server_port}.json"
+            cat >"$client_cfg" <<EOF
+{
+  "server": "127.0.0.1:$server_port",
+  "auth": "$password",
+  "transport": {
+    "type": "udp",
+    "udp": {
+      "hopInterval": "10s"
+    }
+  },
+  "tls": {
+    "sni": "www.bing.com",
+    "insecure": true,
+    "alpn": ["h3"]
+  },
+  "quic": {
+    "initStreamReceiveWindow": 26843545,
+    "maxStreamReceiveWindow": 26843545,
+    "initConnReceiveWindow": 67108864,
+    "maxConnReceiveWindow": 67108864
+  },
+  "bandwidth": {
+    "up": "${up_bw} mbps",
+    "down": "${down_bw} mbps"
+  },
+  "http": {
+    "listen": "0.0.0.0:$server_port",
+    "username": "$proxy_username",
+    "password": "$proxy_password",
+    "realm": "$http_realm"
+  },
+  "socks5": {
+    "listen": "0.0.0.0:$server_port",
+    "username": "$proxy_username",
+    "password": "$proxy_password"
+  }
+}
+EOF
+                    echo -e "\n${GREEN}已生成端口 $server_port 实例，密码：$password"
+        echo "服务端配置: $config_file (监听127.0.0.1:$server_port，转发到代理出口)"
+        echo "客户端配置: $client_cfg (监听0.0.0.0:$server_port，提供HTTP/SOCKS5代理)"
+        echo "--------------------------------------${NC}"
+        elif [[ "$deploy_mode" == "2" ]]; then
             # 双端不同机模式：生成客户端配置文件
             local client_cfg="/root/${domain}_${server_port}.json"
             cat >"$client_cfg" <<EOF
@@ -550,11 +685,6 @@ EOF
             echo -e "\n${GREEN}已生成端口 $server_port 实例，密码：$password"
             echo "服务端配置: $config_file"
             echo "客户端配置: $client_cfg"
-            echo "--------------------------------------${NC}"
-        else
-            # 双端同机模式：只显示服务端信息
-            echo -e "\n${GREEN}已生成端口 $server_port 实例，密码：$password"
-            echo "服务端配置: $config_file"
             echo "--------------------------------------${NC}"
         fi
     done <<< "$proxies"
@@ -668,23 +798,25 @@ EOF
             ;;
     esac
     
-    # 双端同机模式下清理可能存在的旧客户端服务
+    # 双端同机模式下需要启动客户端服务来提供HTTP/SOCKS5代理
     if [[ "$deploy_mode" == "1" ]]; then
-        echo -e "${YELLOW}检测到双端同机模式，正在清理可能存在的旧客户端服务...${NC}"
+        echo -e "${YELLOW}检测到双端同机模式，正在启动客户端服务提供HTTP/SOCKS5代理...${NC}"
         
-        # 停止并禁用客户端服务
-        systemctl stop hysteria-client-manager.service 2>/dev/null || true
-        systemctl disable hysteria-client-manager.service 2>/dev/null || true
+        # 确保客户端启动脚本存在
+        if [ ! -f "/usr/local/bin/hysteria-client-manager.sh" ]; then
+            echo -e "${YELLOW}正在创建客户端启动脚本...${NC}"
+            create_client_unified_service
+        fi
         
-        # 停止所有客户端实例
-        systemctl stop hysteriaclient@* 2>/dev/null || true
-        systemctl disable hysteriaclient@* 2>/dev/null || true
+        # 启动客户端统一服务
+        if systemctl enable --now hysteria-client-manager.service &>/dev/null; then
+            echo -e "${GREEN}✓ 客户端统一服务启动成功${NC}"
+        else
+            echo -e "${RED}✗ 客户端统一服务启动失败${NC}"
+        fi
         
-        # 杀死客户端进程
-        pkill -f "hysteria client" 2>/dev/null || true
-        
-        echo -e "${GREEN}✓ 双端同机模式：服务端直接提供HTTP/SOCKS5代理服务${NC}"
-        echo -e "${YELLOW}提示：无需客户端服务，可直接通过服务端端口使用代理${NC}"
+        echo -e "${GREEN}✓ 双端同机模式：服务端监听本地回环，客户端提供HTTP/SOCKS5代理服务${NC}"
+        echo -e "${YELLOW}提示：客户端服务已启动，可通过外部端口使用代理${NC}"
     fi
 }
 
@@ -1301,9 +1433,9 @@ acl:
 
     local config_file="$CONFIG_DIR/config_${server_port}.yaml"
     if [[ "$deploy_mode" == "1" ]]; then
-        # 双端同机模式：服务端直接提供HTTP/SOCKS5代理
+        # 双端同机模式：服务端监听本地回环，转发到代理出口
         cat >"$config_file" <<EOF
-listen: :$server_port
+listen: 127.0.0.1:$server_port
 
 tls:
   cert: $crt
@@ -1328,16 +1460,15 @@ bandwidth:
   up: ${up_bw} mbps
   down: ${down_bw} mbps
 
-http:
-  listen: 0.0.0.0:$server_port
-  username: $proxy_username
-  password: $proxy_password
-  realm: $http_realm
+outbounds:
+  - name: my_proxy
+    type: http
+    http:
+      url: $proxy_url
 
-socks5:
-  listen: 0.0.0.0:$server_port
-  username: $proxy_username
-  password: $proxy_password
+acl:
+  inline:
+    - my_proxy(all)
 EOF
     else
         # 双端不同机模式：服务端只提供Hysteria协议
@@ -1445,7 +1576,48 @@ EOF
             ;;
     esac
 
-    if [[ "$deploy_mode" == "2" ]]; then
+    if [[ "$deploy_mode" == "1" ]]; then
+        # 双端同机模式：生成客户端配置文件，监听外部端口
+        local client_cfg="/root/${domain}_${server_port}.json"
+        cat >"$client_cfg" <<EOF
+{
+  "server": "127.0.0.1:$server_port",
+  "auth": "$password",
+  "transport": {
+    "type": "udp",
+    "udp": {
+      "hopInterval": "10s"
+    }
+  },
+  "tls": {
+    "sni": "www.bing.com",
+    "insecure": true,
+    "alpn": ["h3"]
+  },
+  "quic": {
+    "initStreamReceiveWindow": 26843545,
+    "maxStreamReceiveWindow": 26843545,
+    "initConnReceiveWindow": 67108864,
+    "maxConnReceiveWindow": 67108864
+  },
+  "bandwidth": {
+    "up": "${up_bw} mbps",
+    "down": "${down_bw} mbps"
+  },
+  "http": {
+    "listen": "0.0.0.0:$server_port",
+    "username": "$proxy_username",
+    "password": "$proxy_password",
+    "realm": "$http_realm"
+  },
+  "socks5": {
+    "listen": "0.0.0.0:$server_port",
+    "username": "$proxy_username",
+    "password": "$proxy_password"
+  }
+}
+EOF
+    elif [[ "$deploy_mode" == "2" ]]; then
         # 双端不同机模式：生成客户端配置文件
         local client_cfg="/root/${domain}_${server_port}.json"
         cat >"$client_cfg" <<EOF
@@ -1490,7 +1662,7 @@ EOF
 
     echo -e "${GREEN}实例已创建并启动。${NC}"
     echo "服务端配置文件: $config_file"
-    if [[ "$deploy_mode" == "2" ]]; then
+    if [[ "$deploy_mode" == "1" ]] || [[ "$deploy_mode" == "2" ]]; then
         echo "客户端配置文件: $client_cfg"
     fi
     echo "服务器IP: $domain"
@@ -1499,9 +1671,10 @@ EOF
     
     # 根据部署模式显示信息
     if [[ "$deploy_mode" == "1" ]]; then
-        echo -e "${YELLOW}双端同机模式 - 服务端直接提供代理服务：${NC}"
-        echo -e "${YELLOW}  HTTP代理: 127.0.0.1:$server_port${NC}"
-        echo -e "${YELLOW}  SOCKS5代理: 127.0.0.1:$server_port${NC}"
+        echo -e "${YELLOW}双端同机模式 - 服务端转发到代理出口，客户端提供HTTP/SOCKS5代理：${NC}"
+        echo -e "${YELLOW}  服务端监听: 127.0.0.1:$server_port (转发到代理出口)${NC}"
+        echo -e "${YELLOW}  客户端HTTP代理: 0.0.0.0:$server_port${NC}"
+        echo -e "${YELLOW}  客户端SOCKS5代理: 0.0.0.0:$server_port${NC}"
     else
         echo -e "${YELLOW}双端不同机模式 - 服务端信息：${NC}"
         echo -e "${YELLOW}  服务器IP: $domain${NC}"
