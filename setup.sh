@@ -69,11 +69,11 @@ main_menu() {
         }
         
         case $choice in
-            1) bash ./config.sh install ;;
-            2) bash ./server.sh ;;
-            3) bash ./client.sh ;;
-            4) bash ./config.sh optimize ;;
-            5) bash ./config.sh update ;;
+            1) bash /root/hysteria/config.sh install ;;
+            2) bash /root/hysteria/server.sh ;;
+            3) bash /root/hysteria/client.sh ;;
+            4) bash /root/hysteria/config.sh optimize ;;
+            5) bash /root/hysteria/config.sh update ;;
             6)
                 echo -e "${YELLOW}服务端状态:${NC}"
                 systemctl status hysteria-server@* --no-pager 2>/dev/null || echo "没有运行的服务端实例"
@@ -82,7 +82,7 @@ main_menu() {
                 systemctl status hysteriaclient@* --no-pager 2>/dev/null || echo "没有运行的客户端实例"
                 read -t 30 -n 1 -s -r -p "按任意键继续..."
                 ;;
-            7) bash ./config.sh uninstall ;;
+            7) bash /root/hysteria/config.sh uninstall ;;
             0) exit 0 ;;
             *)
                 printf "%b无效选择%b\n" "${RED}" "${NC}"
@@ -311,6 +311,10 @@ is_port_in_use() {
 }
 
 generate_instances_batch() {
+    # 设置配置目录
+    CONFIG_DIR="/etc/hysteria"
+    CLIENT_OUT_DIR="/root"
+    
     echo -e "${YELLOW}请输入每个实例的带宽上下行限制（单位 mbps，直接回车为默认185）：${NC}"
     read -p "上行带宽 [185]: " up_bw
     read -p "下行带宽 [185]: " down_bw
@@ -428,7 +432,7 @@ EOF
         ports_to_create+=("$server_port")
         configs_to_create+=("$config_file")
 
-        local client_cfg="/root/${domain}_${server_port}.json"
+        local client_cfg="$CLIENT_OUT_DIR/${domain}_${server_port}.json"
         cat >"$client_cfg" <<EOF
 {
   "server": "$server_address:$server_port",
@@ -523,42 +527,108 @@ EOF
             echo -e "${YELLOW}正在重新加载systemd配置...${NC}"
             systemctl daemon-reload
             
-            # 批量启动所有服务
-            echo -e "${YELLOW}正在批量启动所有服务...${NC}"
-            for port in "${ports_to_create[@]}"; do
-                if systemctl start "hysteria-server@${port}.service"; then
-                    echo -e "${GREEN}✓ 服务 hysteria-server@${port}.service 启动成功${NC}"
-                else
-                    echo -e "${RED}✗ 服务 hysteria-server@${port}.service 启动失败${NC}"
-                    systemctl status "hysteria-server@${port}.service" --no-pager
+            # 分批次启动所有服务（避免启动风暴）
+            echo -e "${YELLOW}正在分批次启动所有服务...${NC}"
+            total_services=${#ports_to_create[@]}
+            
+            # 根据服务数量智能调整批次大小
+            if [ $total_services -le 20 ]; then
+                batch_size=5
+                sleep_interval=2
+            elif [ $total_services -le 50 ]; then
+                batch_size=8
+                sleep_interval=3
+            else
+                batch_size=10
+                sleep_interval=4
+            fi
+            
+            echo -e "${YELLOW}总服务数: $total_services, 批次大小: $batch_size, 间隔: ${sleep_interval}秒${NC}"
+            
+            for ((i=0; i<total_services; i+=batch_size)); do
+                batch_end=$((i + batch_size))
+                if [ $batch_end -gt $total_services ]; then
+                    batch_end=$total_services
+                fi
+                
+                echo -e "${YELLOW}启动批次 $((i/batch_size + 1)) (服务 $((i+1))-$batch_end/$total_services)...${NC}"
+                
+                for ((j=i; j<batch_end; j++)); do
+                    port="${ports_to_create[j]}"
+                    if systemctl start "hysteria-server@${port}.service"; then
+                        echo -e "${GREEN}✓ 服务 hysteria-server@${port}.service 启动成功${NC}"
+                    else
+                        echo -e "${RED}✗ 服务 hysteria-server@${port}.service 启动失败${NC}"
+                        systemctl status "hysteria-server@${port}.service" --no-pager
+                    fi
+                    # 轻微节流
+                    sleep 0.2
+                done
+                
+                if [ $batch_end -lt $total_services ]; then
+                    echo -e "${YELLOW}已启动 $batch_end/$total_services 个服务，暂停 ${sleep_interval} 秒...${NC}"
+                    sleep $sleep_interval
                 fi
             done
             ;;
         3)
-            # 直接进程模式
-            echo -e "${YELLOW}正在直接启动hysteria进程...${NC}"
-            for i in "${!ports_to_create[@]}"; do
-                local port="${ports_to_create[$i]}"
-                local config="${configs_to_create[$i]}"
-                
-                # 检查是否已有进程在运行
-                if pgrep -f "hysteria.*server.*-c.*$config" >/dev/null; then
-                    echo -e "${YELLOW}端口 $port 的进程已在运行，跳过${NC}"
-                    continue
+            # 直接进程模式（分批次启动）
+            echo -e "${YELLOW}正在分批次启动hysteria进程...${NC}"
+            total_processes=${#ports_to_create[@]}
+            
+            # 根据进程数量智能调整批次大小
+            if [ $total_processes -le 20 ]; then
+                batch_size=5
+                sleep_interval=2
+            elif [ $total_processes -le 50 ]; then
+                batch_size=8
+                sleep_interval=3
+            else
+                batch_size=10
+                sleep_interval=4
+            fi
+            
+            echo -e "${YELLOW}总进程数: $total_processes, 批次大小: $batch_size, 间隔: ${sleep_interval}秒${NC}"
+            
+            for ((i=0; i<total_processes; i+=batch_size)); do
+                batch_end=$((i + batch_size))
+                if [ $batch_end -gt $total_processes ]; then
+                    batch_end=$total_processes
                 fi
                 
-                # 后台启动hysteria进程
-                nohup $HYSTERIA_BIN server -c "$config" >/dev/null 2>&1 &
-                local pid=$!
+                echo -e "${YELLOW}启动批次 $((i/batch_size + 1)) (进程 $((i+1))-$batch_end/$total_processes)...${NC}"
                 
-                # 等待一下确保进程启动
-                sleep 0.5
+                for ((j=i; j<batch_end; j++)); do
+                    local port="${ports_to_create[j]}"
+                    local config="${configs_to_create[j]}"
+                    
+                    # 检查是否已有进程在运行
+                    if pgrep -f "hysteria.*server.*-c.*$config" >/dev/null; then
+                        echo -e "${YELLOW}端口 $port 的进程已在运行，跳过${NC}"
+                        continue
+                    fi
+                    
+                    # 后台启动hysteria进程（降低优先级）
+                    ionice -c2 -n7 nice -n 10 nohup $HYSTERIA_BIN server -c "$config" >/dev/null 2>&1 &
+                    local pid=$!
+                    
+                    # 等待一下确保进程启动
+                    sleep 0.3
+                    
+                    # 检查进程是否成功启动
+                    if kill -0 "$pid" 2>/dev/null; then
+                        echo -e "${GREEN}✓ 端口 $port 的hysteria进程启动成功 (PID: $pid)${NC}"
+                    else
+                        echo -e "${RED}✗ 端口 $port 的hysteria进程启动失败${NC}"
+                    fi
+                    
+                    # 轻微节流
+                    sleep 0.2
+                done
                 
-                # 检查进程是否成功启动
-                if kill -0 "$pid" 2>/dev/null; then
-                    echo -e "${GREEN}✓ 端口 $port 的hysteria进程启动成功 (PID: $pid)${NC}"
-                else
-                    echo -e "${RED}✗ 端口 $port 的hysteria进程启动失败${NC}"
+                if [ $batch_end -lt $total_processes ]; then
+                    echo -e "${YELLOW}已启动 $batch_end/$total_processes 个进程，暂停 ${sleep_interval} 秒...${NC}"
+                    sleep $sleep_interval
                 fi
             done
             ;;
@@ -2509,7 +2579,7 @@ CONFIGEOF
 #!/bin/bash
 cd /root/hysteria
 [ "$EUID" -ne 0 ] && printf "\033[0;31m请使用root权限运行此脚本\033[0m\n" && exit 1
-bash ./main.sh
+            bash /root/hysteria/main.sh
 CMDEOF
 chmod +x /usr/local/bin/h2
 
