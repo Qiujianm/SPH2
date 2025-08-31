@@ -423,7 +423,48 @@ generate_instances_batch() {
         proxy_url="http://$proxy_user:$proxy_pass@$proxy_ip:$proxy_port"
         config_file="$CONFIG_DIR/config_${server_port}.yaml"
 
-        cat >"$config_file" <<EOF
+        if [[ "$deploy_mode" == "1" ]]; then
+            # 双端同机模式：服务端直接提供HTTP/SOCKS5代理
+            cat >"$config_file" <<EOF
+listen: :$server_port
+
+tls:
+  cert: $crt
+  key: $key
+
+auth:
+  type: password
+  password: $password
+
+masquerade:
+  proxy:
+    url: https://www.bing.com
+    rewriteHost: true
+
+quic:
+  initStreamReceiveWindow: 26843545
+  maxStreamReceiveWindow: 26843545
+  initConnReceiveWindow: 67108864
+  maxConnReceiveWindow: 67108864
+
+bandwidth:
+  up: ${up_bw} mbps
+  down: ${down_bw} mbps
+
+http:
+  listen: 0.0.0.0:$server_port
+  username: $proxy_username
+  password: $proxy_password
+  realm: $http_realm
+
+socks5:
+  listen: 0.0.0.0:$server_port
+  username: $proxy_username
+  password: $proxy_password
+EOF
+        else
+            # 双端不同机模式：服务端只提供Hysteria协议
+            cat >"$config_file" <<EOF
 listen: :$server_port
 
 tls:
@@ -459,13 +500,16 @@ acl:
   inline:
     - my_proxy(all)
 EOF
+        fi
 
         # 收集端口和配置文件信息
         ports_to_create+=("$server_port")
         configs_to_create+=("$config_file")
 
-        local client_cfg="/root/${domain}_${server_port}.json"
-        cat >"$client_cfg" <<EOF
+        if [[ "$deploy_mode" == "2" ]]; then
+            # 双端不同机模式：生成客户端配置文件
+            local client_cfg="/root/${domain}_${server_port}.json"
+            cat >"$client_cfg" <<EOF
 {
   "server": "$server_address:$server_port",
   "auth": "$password",
@@ -503,10 +547,16 @@ EOF
   }
 }
 EOF
-        echo -e "\n${GREEN}已生成端口 $server_port 实例，密码：$password"
-        echo "服务端配置: $config_file"
-        echo "客户端配置: $client_cfg"
-        echo "--------------------------------------${NC}"
+            echo -e "\n${GREEN}已生成端口 $server_port 实例，密码：$password"
+            echo "服务端配置: $config_file"
+            echo "客户端配置: $client_cfg"
+            echo "--------------------------------------${NC}"
+        else
+            # 双端同机模式：只显示服务端信息
+            echo -e "\n${GREEN}已生成端口 $server_port 实例，密码：$password"
+            echo "服务端配置: $config_file"
+            echo "--------------------------------------${NC}"
+        fi
     done <<< "$proxies"
     
     # 询问启动方式
