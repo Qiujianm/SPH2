@@ -413,14 +413,14 @@ Restart=always
 RestartSec=5
 User=root
 PIDFile=/var/run/hysteria-server-manager.pid
-# 资源限制优化
-MemoryMax=1G
-CPUQuota=30%
-Nice=10
-IOSchedulingClass=2
-IOSchedulingPriority=7
-TasksMax=100
-LimitNOFILE=1024
+# 资源限制优化（无限制）
+# MemoryMax=75%
+# CPUQuota=75%
+Nice=5
+IOSchedulingClass=1
+IOSchedulingPriority=4
+# TasksMax=200
+# LimitNOFILE=2048
 # 进程管理
 KillMode=mixed
 KillSignal=SIGTERM
@@ -1962,14 +1962,14 @@ Restart=always
 RestartSec=5
 User=root
 PIDFile=/var/run/hysteria-client-manager.pid
-# 资源限制优化
-MemoryMax=1G
-CPUQuota=30%
-Nice=10
-IOSchedulingClass=2
-IOSchedulingPriority=7
-TasksMax=100
-LimitNOFILE=1024
+# 资源限制优化（无限制）
+# MemoryMax=75%
+# CPUQuota=75%
+Nice=5
+IOSchedulingClass=1
+IOSchedulingPriority=4
+# TasksMax=200
+# LimitNOFILE=2048
 TimeoutStopSec=60
 
 [Install]
