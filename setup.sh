@@ -53,12 +53,13 @@ main_menu() {
         printf "%b作者: ${AUTHOR}%b\n" "${GREEN}" "${NC}"
         printf "%b版本: ${VERSION}%b\n" "${GREEN}" "${NC}"
         printf "%b====================================%b\n" "${GREEN}" "${NC}"
-        echo "1. 服务端管理"
-        echo "2. 客户端管理"
-        echo "3. 系统优化"
-        echo "4. 检查更新"
-        echo "5. 运行状态"
-        echo "6. 完全卸载"
+        echo "1. 安装模式"
+        echo "2. 服务端管理"
+        echo "3. 客户端管理"
+        echo "4. 系统优化"
+        echo "5. 检查更新"
+        echo "6. 运行状态"
+        echo "7. 完全卸载"
         echo "0. 退出脚本"
         printf "%b====================================%b\n" "${GREEN}" "${NC}"
         
@@ -68,11 +69,12 @@ main_menu() {
         }
         
         case $choice in
-            1) bash ./server.sh ;;
-            2) bash ./client.sh ;;
-            3) bash ./config.sh optimize ;;
-            4) bash ./config.sh update ;;
-            5)
+            1) bash ./config.sh install ;;
+            2) bash ./server.sh ;;
+            3) bash ./client.sh ;;
+            4) bash ./config.sh optimize ;;
+            5) bash ./config.sh update ;;
+            6)
                 echo -e "${YELLOW}服务端状态:${NC}"
                 systemctl status hysteria-server@* --no-pager 2>/dev/null || echo "没有运行的服务端实例"
                 echo
@@ -80,7 +82,7 @@ main_menu() {
                 systemctl status hysteriaclient@* --no-pager 2>/dev/null || echo "没有运行的客户端实例"
                 read -t 30 -n 1 -s -r -p "按任意键继续..."
                 ;;
-            6) bash ./config.sh uninstall ;;
+            7) bash ./config.sh uninstall ;;
             0) exit 0 ;;
             *)
                 printf "%b无效选择%b\n" "${RED}" "${NC}"
@@ -110,7 +112,6 @@ NC='\033[0m'
 HYSTERIA_BIN="/usr/local/bin/hysteria"
 SYSTEMD_DIR="/etc/systemd/system"
 CONFIG_DIR="/etc/hysteria"
-DEFAULT_BATCH_SIZE=10
 
 check_env() {
     echo -e "${YELLOW}检查环境依赖...${NC}"
@@ -144,19 +145,6 @@ check_env() {
     mkdir -p "$CONFIG_DIR"
     echo -e "${GREEN}✓ 配置目录已创建${NC}"
     
-    # 确保统一的 slice 存在（用于资源记账/后续限额）
-    local slice_file="${SYSTEMD_DIR}/hysteria-server.slice"
-    if [ ! -f "$slice_file" ]; then
-        cat > "$slice_file" <<EOF
-[Slice]
-CPUAccounting=yes
-MemoryAccounting=yes
-TasksAccounting=yes
-EOF
-        systemctl daemon-reload
-        echo -e "${GREEN}✓ 已创建 hysteria-server.slice${NC}"
-    fi
-    
     echo -e "${GREEN}环境检查完成${NC}"
 }
 
@@ -186,11 +174,8 @@ After=network.target
 Type=simple
 ExecStart=$HYSTERIA_BIN server -c $config_file
 Restart=always
-RestartSec=1
+RestartSec=3
 User=root
-Slice=hysteria-server.slice
-LimitNOFILE=1000000
-TasksMax=infinity
 
 [Install]
 WantedBy=multi-user.target
@@ -220,11 +205,8 @@ After=network.target
 Type=simple
 ExecStart=$HYSTERIA_BIN server -c $config_file
 Restart=always
-RestartSec=1
+RestartSec=3
 User=root
-Slice=hysteria-server.slice
-LimitNOFILE=1000000
-TasksMax=infinity
 
 [Install]
 WantedBy=multi-user.target
@@ -258,60 +240,31 @@ mkdir -p "$(dirname "$PID_FILE")"
 
 # 停止已存在的进程
 if [ -f "$PID_FILE" ]; then
-    echo "停止已存在的进程..."
-    pids=$(cat "$PID_FILE" 2>/dev/null || echo "")
-    if [ -n "$pids" ]; then
-        for pid in $pids; do
-            if kill -0 "$pid" 2>/dev/null; then
-                kill "$pid" 2>/dev/null || true
-            fi
-        done
-    fi
+    pkill -F "$PID_FILE" 2>/dev/null || true
     rm -f "$PID_FILE"
 fi
 
-# 收集所有配置文件
-configs=()
+# 启动所有配置文件（优化性能）
+pids=()
+config_count=0
+
 for cfg in "$CONFIG_DIR"/config_*.yaml; do
     if [ -f "$cfg" ]; then
-        configs+=("$cfg")
-    fi
-done
-
-if [ ${#configs[@]} -eq 0 ]; then
-    echo "没有找到配置文件"
-    exit 1
-fi
-
-echo "找到 ${#configs[@]} 个配置文件，开始分批启动..."
-
-# 分批启动，每批5个服务
-batch_size=5
-total_configs=${#configs[@]}
-started_pids=()
-
-for i in "${!configs[@]}"; do
-    cfg="${configs[$i]}"
-    config_count=$((i + 1))
-    
-    echo "Starting server with config: $cfg (${config_count}/${total_configs})"
-    "$HYSTERIA_BIN" server -c "$cfg" &
-    pid=$!
-    started_pids+=("$pid")
-    
-    # 每启动一批后暂停一下，避免系统负载过高
-    if (( (i + 1) % batch_size == 0 )) && (( i + 1 < total_configs )); then
-        echo "已启动 $((i + 1))/$total_configs 个服务，暂停 2 秒..."
-        sleep 2
-    else
+        config_count=$((config_count + 1))
+        
+        echo "Starting server with config: $cfg (${config_count})"
+        "$HYSTERIA_BIN" server -c "$cfg" &
+        pids+=($!)
+        
+        # 减少延迟，提高启动速度
         sleep 0.1
     fi
 done
 
-echo "总共启动了 ${#started_pids[@]} 个服务端配置"
+echo "总共启动了 $config_count 个服务端配置"
 
 # 保存PID到文件
-echo "${started_pids[@]}" > "$PID_FILE"
+echo "${pids[@]}" > "$PID_FILE"
 
 # 等待所有进程
 wait
@@ -332,16 +285,9 @@ Restart=always
 RestartSec=3
 User=root
 PIDFile=/var/run/hysteria-server-manager.pid
-# 资源限制优化
-MemoryMax=2G
-CPUQuota=50%
-Nice=5
+Nice=-10
 IOSchedulingClass=1
 IOSchedulingPriority=4
-# 进程管理
-KillMode=mixed
-KillSignal=SIGTERM
-TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target
@@ -361,7 +307,7 @@ EOF
 
 is_port_in_use() {
     local port=$1
-    ss -lntu | awk '{print $4}' | grep -q ":$port\$"
+    ss -lnt | awk '{print $4}' | grep -q ":$port\$"
 }
 
 generate_instances_batch() {
@@ -377,12 +323,6 @@ generate_instances_batch() {
         [[ -z "$line" ]] && continue
         proxies+="$line"$'\n'
     done
-
-    # 先获取服务器地址
-    local domain=$(curl -s ipinfo.io/ip || curl -s myip.ipip.net | grep -oE "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" || curl -s https://api.ip.sb/ip)
-    if [ -z "$domain" ]; then
-        read -p "请输入服务器公网IP: " domain
-    fi
 
     # 选择双端部署模式
     echo -e "${YELLOW}双端部署模式选择:${NC}"
@@ -421,6 +361,10 @@ generate_instances_batch() {
     read -p "请输入批量新建实例的起始端口: " start_port
     current_port="$start_port"
 
+    local domain=$(curl -s ipinfo.io/ip || curl -s myip.ipip.net | grep -oE "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" || curl -s https://api.ip.sb/ip)
+    if [ -z "$domain" ]; then
+        read -p "请输入服务器公网IP: " domain
+    fi
     local crt_and_key; crt_and_key=$(gen_cert "$domain")
     local crt=$(echo "$crt_and_key" | cut -d'|' -f1)
     local key=$(echo "$crt_and_key" | cut -d'|' -f2)
@@ -531,12 +475,40 @@ EOF
     
     # 询问启动方式
     echo -e "${YELLOW}选择启动方式：${NC}"
-    echo "1. 使用多实例服务（推荐，每个配置一个服务）"
-    echo "2. 直接启动进程（速度快，但重启后需要手动启动）"
-    read -p "请选择 [1-2]: " create_service
+    echo "1. 使用统一服务管理（推荐，一个服务管理所有配置）"
+    echo "2. 使用多实例服务（每个配置一个服务）"
+    echo "3. 直接启动进程（速度快，但重启后需要手动启动）"
+    read -p "请选择 [1-3]: " create_service
     
     case "$create_service" in
         1)
+            # 统一服务模式
+            echo -e "${YELLOW}正在创建统一服务管理所有配置...${NC}"
+            if create_server_unified_service; then
+                echo -e "${GREEN}✓ 统一服务创建成功${NC}"
+                
+                # 重新加载systemd配置
+                echo -e "${YELLOW}正在重新加载systemd配置...${NC}"
+                systemctl daemon-reload
+                
+                # 启动统一服务
+                echo -e "${YELLOW}正在启动统一服务...${NC}"
+                if systemctl start "hysteria-server-manager.service"; then
+                    echo -e "${GREEN}✓ 统一服务启动成功，正在管理所有配置文件${NC}"
+                    # 显示正在管理的配置文件
+                    for i in "${!ports_to_create[@]}"; do
+                        local port="${ports_to_create[$i]}"
+                        echo -e "${GREEN}  - 管理配置：端口 $port${NC}"
+                    done
+                else
+                    echo -e "${RED}✗ 统一服务启动失败${NC}"
+                    systemctl status "hysteria-server-manager.service" --no-pager
+                fi
+            else
+                echo -e "${RED}✗ 统一服务创建失败${NC}"
+            fi
+            ;;
+        2)
             # 多实例服务模式
             echo -e "${YELLOW}正在批量创建systemd服务...${NC}"
             for i in "${!ports_to_create[@]}"; do
@@ -551,38 +523,18 @@ EOF
             echo -e "${YELLOW}正在重新加载systemd配置...${NC}"
             systemctl daemon-reload
             
-            # 批量启动所有服务（优化启动策略）
+            # 批量启动所有服务
             echo -e "${YELLOW}正在批量启动所有服务...${NC}"
-            echo -e "${YELLOW}提示：为避免系统负载过高，将分批启动服务${NC}"
-            
-            # 分批启动，可通过环境变量 HY2_BATCH_SIZE 调整（默认10）
-            batch_size=${HY2_BATCH_SIZE:-$DEFAULT_BATCH_SIZE}
-            # 分批启动，可通过环境变量 HY2_BATCH_SIZE 调整（默认10）
-            batch_size=${HY2_BATCH_SIZE:-$DEFAULT_BATCH_SIZE}
-            total_services=${#ports_to_create[@]}
-            started_count=0
-            
-            for i in "${!ports_to_create[@]}"; do
-                local port="${ports_to_create[$i]}"
-                
+            for port in "${ports_to_create[@]}"; do
                 if systemctl start "hysteria-server@${port}.service"; then
                     echo -e "${GREEN}✓ 服务 hysteria-server@${port}.service 启动成功${NC}"
-                    ((started_count++))
                 else
                     echo -e "${RED}✗ 服务 hysteria-server@${port}.service 启动失败${NC}"
                     systemctl status "hysteria-server@${port}.service" --no-pager
                 fi
-                
-                # 每启动一批后暂停一下，避免系统负载过高
-                if (( (i + 1) % batch_size == 0 )) && (( i + 1 < total_services )); then
-                    echo -e "${YELLOW}已启动 $((i + 1))/$total_services 个服务，暂停 2 秒...${NC}"
-                    sleep 2
-                fi
             done
-            
-            echo -e "${GREEN}✓ 批量启动完成，共启动 $started_count/$total_services 个服务${NC}"
             ;;
-        2)
+        3)
             # 直接进程模式
             echo -e "${YELLOW}正在直接启动hysteria进程...${NC}"
             for i in "${!ports_to_create[@]}"; do
@@ -611,101 +563,6 @@ EOF
             done
             ;;
     esac
-    
-    # 双端同机模式下自动启动客户端
-    if [[ "$deploy_mode" == "1" ]]; then
-        echo -e "${YELLOW}检测到双端同机模式，正在自动启动客户端服务...${NC}"
-        
-        # 检查客户端服务是否存在
-        if systemctl list-unit-files | grep -q "hysteria-client-manager.service"; then
-            if systemctl is-active --quiet hysteria-client-manager.service 2>/dev/null; then
-                echo -e "${GREEN}✓ 客户端服务已在运行${NC}"
-            else
-                echo -e "${YELLOW}正在启动客户端服务...${NC}"
-                if systemctl start hysteria-client-manager.service; then
-                    echo -e "${GREEN}✓ 客户端服务启动成功${NC}"
-                else
-                    echo -e "${RED}✗ 客户端服务启动失败${NC}"
-                    echo -e "${YELLOW}请手动启动客户端服务：systemctl start hysteria-client-manager.service${NC}"
-                fi
-            fi
-        else
-            echo -e "${YELLOW}客户端服务未安装，正在创建并启动...${NC}"
-            
-            # 创建客户端启动脚本
-            CLIENT_SCRIPT="/usr/local/bin/hysteria-client-manager.sh"
-            cat > "$CLIENT_SCRIPT" <<'EOF'
-#!/bin/bash
-# Hysteria Client Manager Script
-
-CONFIG_DIR="/root"
-HYSTERIA_BIN="/usr/local/bin/hysteria"
-PID_FILE="/var/run/hysteria-client-manager.pid"
-
-# 创建PID文件目录
-mkdir -p "$(dirname "$PID_FILE")"
-
-# 停止已存在的进程
-if [ -f "$PID_FILE" ]; then
-    pkill -F "$PID_FILE" 2>/dev/null || true
-    rm -f "$PID_FILE"
-fi
-
-# 启动所有配置文件
-pids=()
-config_count=0
-
-for cfg in "$CONFIG_DIR"/*.json; do
-    if [ -f "$cfg" ]; then
-        config_count=$((config_count + 1))
-        
-        echo "Starting client with config: $cfg (${config_count})"
-        "$HYSTERIA_BIN" client -c "$cfg" &
-        pids+=($!)
-        
-        sleep 0.1
-    fi
-done
-
-echo "总共启动了 $config_count 个客户端配置"
-
-# 保存PID到文件
-echo "${pids[@]}" > "$PID_FILE"
-
-# 等待所有进程
-wait
-EOF
-            chmod +x "$CLIENT_SCRIPT"
-            
-            # 创建systemd服务
-            SERVICE_FILE="/etc/systemd/system/hysteria-client-manager.service"
-            cat > "$SERVICE_FILE" <<EOF
-[Unit]
-Description=Hysteria Client Manager - Manages all client configurations
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/hysteria-client-manager.sh
-Restart=always
-RestartSec=3
-User=root
-PIDFile=/var/run/hysteria-client-manager.pid
-
-[Install]
-WantedBy=multi-user.target
-EOF
-            
-            systemctl daemon-reload
-            
-            if systemctl start hysteria-client-manager.service; then
-                echo -e "${GREEN}✓ 客户端服务创建并启动成功${NC}"
-            else
-                echo -e "${RED}✗ 客户端服务启动失败${NC}"
-                echo -e "${YELLOW}请手动启动客户端服务：systemctl start hysteria-client-manager.service${NC}"
-            fi
-        fi
-    fi
 }
 
 list_instances_and_delete() {
@@ -1311,59 +1168,9 @@ acl:
     - my_proxy(all)"
     fi
 
-    # 根据部署模式设置服务端监听地址
-    local server_listen=""
-    if [[ "$deploy_mode" == "1" ]]; then
-        server_listen=":$server_port"  # 双端同机：直接监听所有接口
-    else
-        server_listen=":$server_port"  # 双端不同机：监听所有接口
-    fi
-
     local config_file="$CONFIG_DIR/config_${server_port}.yaml"
-    if [[ "$deploy_mode" == "1" ]]; then
-        # 双端同机模式：服务端直接提供HTTP/SOCKS5代理
-        cat >"$config_file" <<EOF
-listen: $server_listen
-
-tls:
-  cert: $crt
-  key: $key
-
-auth:
-  type: password
-  password: $password
-
-masquerade:
-  proxy:
-    url: https://www.bing.com
-    rewriteHost: true
-
-quic:
-  initStreamReceiveWindow: 26843545
-  maxStreamReceiveWindow: 26843545
-  initConnReceiveWindow: 67108864
-  maxConnReceiveWindow: 67108864
-
-bandwidth:
-  up: ${up_bw} mbps
-  down: ${down_bw} mbps
-
-http:
-  listen: 0.0.0.0:$server_port
-  username: $proxy_username
-  password: $proxy_password
-  realm: $http_realm
-
-socks5:
-  listen: 0.0.0.0:$server_port
-  username: $proxy_username
-  password: $proxy_password
-$proxy_config
-EOF
-    else
-        # 双端不同机模式：服务端只提供Hysteria协议
-        cat >"$config_file" <<EOF
-listen: $server_listen
+    cat >"$config_file" <<EOF
+listen: :$server_port
 
 tls:
   cert: $crt
@@ -1389,21 +1196,44 @@ bandwidth:
   down: ${down_bw} mbps
 $proxy_config
 EOF
-    fi
 
     # 询问启动方式
     echo -e "${YELLOW}选择启动方式：${NC}"
-    echo "1. 使用多实例服务（推荐，每个配置一个服务）"
-    echo "2. 直接启动进程（速度快，但重启后需要手动启动）"
-    read -p "请选择 [1-2]: " create_service
+    echo "1. 使用统一服务管理（推荐，一个服务管理所有配置）"
+    echo "2. 使用多实例服务（每个配置一个服务）"
+    echo "3. 直接启动进程（速度快，但重启后需要手动启动）"
+    read -p "请选择 [1-3]: " create_service
     
     case "$create_service" in
         1)
+            # 统一服务模式
+            echo -e "${YELLOW}正在创建统一服务管理所有配置...${NC}"
+            if create_server_unified_service; then
+                echo -e "${GREEN}✓ 统一服务创建成功${NC}"
+                
+                # 重新加载systemd配置
+                echo -e "${YELLOW}正在重新加载systemd配置...${NC}"
+                systemctl daemon-reload
+                
+                # 启动统一服务
+                echo -e "${YELLOW}正在启动统一服务...${NC}"
+                if systemctl start "hysteria-server-manager.service"; then
+                    echo -e "${GREEN}✓ 统一服务启动成功，正在管理所有配置文件${NC}"
+                    echo -e "${GREEN}  - 管理配置：端口 $server_port${NC}"
+                else
+                    echo -e "${RED}✗ 统一服务启动失败${NC}"
+                    systemctl status "hysteria-server-manager.service" --no-pager
+                fi
+            else
+                echo -e "${RED}✗ 统一服务创建失败${NC}"
+            fi
+            ;;
+        2)
             # 多实例服务模式
             create_systemd_unit "$server_port" "$config_file"
             systemctl restart "hysteria-server@${server_port}.service"
             ;;
-        2)
+        3)
             # 直接进程模式
             echo -e "${YELLOW}正在直接启动hysteria进程...${NC}"
             
@@ -1430,10 +1260,8 @@ EOF
             ;;
     esac
 
-    if [[ "$deploy_mode" == "2" ]]; then
-        # 双端不同机模式：生成客户端配置文件
-        local client_cfg="/root/${domain}_${server_port}.json"
-        cat >"$client_cfg" <<EOF
+    local client_cfg="/root/${domain}_${server_port}.json"
+    cat >"$client_cfg" <<EOF
 {
   "server": "$server_address:$server_port",
   "auth": "$password",
@@ -1471,67 +1299,13 @@ EOF
   }
 }
 EOF
-    fi
 
     echo -e "${GREEN}实例已创建并启动。${NC}"
     echo "服务端配置文件: $config_file"
-    if [[ "$deploy_mode" == "2" ]]; then
-        echo "客户端配置文件: $client_cfg"
-    fi
+    echo "客户端配置文件: $client_cfg"
     echo "服务器IP: $domain"
     echo "监听端口: $server_port"
     echo "密码: $password"
-    
-    # 根据部署模式显示信息
-    if [[ "$deploy_mode" == "1" ]]; then
-        echo -e "${YELLOW}双端同机模式 - 服务端直接提供代理服务：${NC}"
-        echo -e "${YELLOW}  HTTP代理: 127.0.0.1:$server_port${NC}"
-        echo -e "${YELLOW}  SOCKS5代理: 127.0.0.1:$server_port${NC}"
-    else
-        echo -e "${YELLOW}双端不同机模式 - 服务端信息：${NC}"
-        echo -e "${YELLOW}  服务器IP: $domain${NC}"
-        echo -e "${YELLOW}  监听端口: $server_port${NC}"
-        echo -e "${YELLOW}  客户端配置文件: /root/${domain}_${server_port}.json${NC}"
-    fi
-    
-
-}
-
-# 清理所有旧客户端服务
-cleanup_old_client_services() {
-    echo -e "${YELLOW}正在清理所有旧的客户端服务...${NC}"
-    
-    # 查找所有客户端服务
-    client_services=$(systemctl list-unit-files | grep "hysteriaclient@" | awk '{print $1}')
-    
-    if [ -z "$client_services" ]; then
-        echo -e "${GREEN}没有找到旧的客户端服务${NC}"
-        return
-    fi
-    
-    echo -e "${YELLOW}找到以下客户端服务：${NC}"
-    echo "$client_services"
-    echo
-    
-    read -p "确认要停止并禁用这些服务吗？(y/n): " confirm
-    if [[ "$confirm" != [yY] ]]; then
-        echo -e "${YELLOW}操作已取消${NC}"
-        return
-    fi
-    
-    cleaned_count=0
-    for service in $client_services; do
-        echo -e "${YELLOW}正在清理: $service${NC}"
-        systemctl stop "$service" >/dev/null 2>&1 || true
-        systemctl disable "$service" >/dev/null 2>&1 || true
-        ((cleaned_count++))
-    done
-    
-    echo -e "${GREEN}✓ 清理完成，共清理 $cleaned_count 个客户端服务${NC}"
-    echo -e "${YELLOW}提示：这些服务已被停止和禁用，但服务文件仍然存在${NC}"
-    echo -e "${YELLOW}如需完全删除，请手动删除 /etc/systemd/system/hysteriaclient@*.service 文件${NC}"
-    
-    read -p "按回车键返回..."
 }
 
 main_menu() {
@@ -1545,9 +1319,8 @@ main_menu() {
         echo "5. 启动/停止/重启所有实例"
         echo "6. 查看所有实例状态"
         echo "7. 全自动生成单实例配置"
-        echo "8. 清理所有旧客户端服务"
         echo "0. 退出"
-        read -p "请选择[0-8]: " opt
+        read -p "请选择[0-7]: " opt
         case "$opt" in
             1) generate_instances_batch ;;
             2) list_instances_and_delete; read -p "按回车返回..." ;;
@@ -1556,7 +1329,6 @@ main_menu() {
             5) manage_all_instances ;;
             6) status_all_instances; read -p "按回车返回..." ;;
             7) generate_instance_auto ;;
-            8) cleanup_old_client_services ;;
             0) exit 0 ;;
             *) echo "无效选择" ;;
         esac
@@ -1564,6 +1336,18 @@ main_menu() {
 }
 
 main_menu
+case "$1" in
+    "install")
+        generate_server_config
+        ;;
+    "manage")
+        server_menu
+        ;;
+    *)
+        echo "用法: $0 {install|manage}"
+        exit 1
+        ;;
+esac
 SERVEREOF
     chmod +x /root/hysteria/server.sh
 
@@ -2589,15 +2373,13 @@ net.core.wmem_default=16777216
 # TCP缓冲区设置
 net.ipv4.tcp_rmem=4096 87380 16777216
 net.ipv4.tcp_wmem=4096 87380 16777216
+# 启用 $congestion_control 拥塞控制
+net.ipv4.tcp_congestion_control=$congestion_control
 EOF
 
     # 如果选择了 BBR+FQ，添加 default_qdisc 设置
     if [ "$default_qdisc" == "fq" ]; then
         echo "net.core.default_qdisc=fq" >> /etc/sysctl.d/99-hysteria.conf
-    fi
-    # 仅在选择 BBR 时设置内核 TCP 拥塞控制
-    if [ "$congestion_control" = "bbr" ]; then
-        echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.d/99-hysteria.conf
     fi
     
     # 其他网络优化
@@ -2662,7 +2444,7 @@ update() {
     fi
     
     printf "%b尝试从 %s 下载...%b\n" "${YELLOW}" "$url" "${NC}"
-    if wget --no-check-certificate --timeout=30 --tries=3 -O /usr/local/bin/hysteria.new "$url" && 
+    if wget -O /usr/local/bin/hysteria.new "$url" && 
        chmod +x /usr/local/bin/hysteria.new &&
        /usr/local/bin/hysteria.new version >/dev/null 2>&1; then
         mv /usr/local/bin/hysteria.new /usr/local/bin/hysteria
@@ -2738,30 +2520,16 @@ chmod +x /usr/local/bin/h2
 cleanup_old_installation() {
     printf "%b清理旧的安装...%b\n" "${YELLOW}" "${NC}"
     
-    # 停止所有hysteria服务端服务
-    printf "%b停止服务端服务...%b\n" "${YELLOW}" "${NC}"
+    # 停止所有hysteria服务
     systemctl stop hysteria-server 2>/dev/null
     systemctl stop hysteria-server@* 2>/dev/null
-    systemctl stop hysteria-server-manager 2>/dev/null
     systemctl disable hysteria-server 2>/dev/null
     systemctl disable hysteria-server@* 2>/dev/null
-    systemctl disable hysteria-server-manager 2>/dev/null
-    
-    # 停止所有hysteria客户端服务
-    printf "%b停止客户端服务...%b\n" "${YELLOW}" "${NC}"
-    systemctl stop hysteriaclient@* 2>/dev/null
-    systemctl stop hysteria-client-manager 2>/dev/null
-    systemctl disable hysteriaclient@* 2>/dev/null
-    systemctl disable hysteria-client-manager 2>/dev/null
     
     # 杀死所有hysteria进程
-    printf "%b终止hysteria进程...%b\n" "${YELLOW}" "${NC}"
     pkill -f hysteria 2>/dev/null
-    pkill -f "hysteria server" 2>/dev/null
-    pkill -f "hysteria client" 2>/dev/null
     
     # 清理文件和目录
-    printf "%b清理文件和目录...%b\n" "${YELLOW}" "${NC}"
     rm -rf /etc/hysteria
     rm -rf /root/H2
     rm -rf /root/hysteria
@@ -2769,30 +2537,17 @@ cleanup_old_installation() {
     rm -f /usr/local/bin/h2
     rm -f /etc/systemd/system/hysteria-server.service
     rm -f /etc/systemd/system/hysteria-server@*.service
-    rm -f /etc/systemd/system/hysteria-server-manager.service
-    rm -f /etc/systemd/system/hysteriaclient@*.service
-    rm -f /etc/systemd/system/hysteria-client-manager.service
     rm -f /etc/sysctl.d/99-hysteria.conf
     rm -f /etc/security/limits.d/99-hysteria.conf
     rm -f /root/{main,server,client,config}.sh
     
-    # 清理配置文件
-    printf "%b清理配置文件...%b\n" "${YELLOW}" "${NC}"
+    # 清理客户端配置文件
     rm -f /root/*.json
-    rm -f /root/config_*.yaml
-    rm -f /var/run/hysteria-server-manager.pid
-    
-    # 清理h2命令
-    rm -f /usr/local/bin/h2
-    if [ -f "/root/.bashrc" ]; then
-        sed -i '/alias h2=/d' /root/.bashrc 2>/dev/null || true
-    fi
     
     # 重新加载systemd
-    printf "%b重新加载systemd...%b\n" "${YELLOW}" "${NC}"
     systemctl daemon-reload
     
-    printf "%b✓ 清理完成%b\n" "${GREEN}" "${NC}"
+    printf "%b清理完成%b\n" "${GREEN}" "${NC}"
 }
 
 # 安装基础依赖
@@ -2800,9 +2555,9 @@ install_base() {
     printf "%b安装基础依赖...%b\n" "${YELLOW}" "${NC}"
     if [ -f /etc/debian_version ]; then
         apt update
-        apt install -y curl wget openssl net-tools iproute2
+        apt install -y curl wget openssl net-tools
     elif [ -f /etc/redhat-release ]; then
-        yum install -y curl wget openssl net-tools iproute
+        yum install -y curl wget openssl net-tools
     else
         printf "%b不支持的系统%b\n" "${RED}" "${NC}"
         exit 1
@@ -2877,6 +2632,59 @@ install_hysteria() {
     return 1
 }
 
+# 验证安装
+verify_installation() {
+    printf "%b验证安装...%b\n" "${YELLOW}" "${NC}"
+    
+    # 检查 hysteria 二进制文件
+    if [ ! -f "/usr/local/bin/hysteria" ]; then
+        printf "%b✗ Hysteria 二进制文件不存在%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    if [ ! -x "/usr/local/bin/hysteria" ]; then
+        printf "%b✗ Hysteria 二进制文件没有执行权限%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    # 检查文件大小
+    local size=$(stat -c%s /usr/local/bin/hysteria 2>/dev/null || echo "0")
+    if [ "$size" -lt 1000000 ]; then  # 小于1MB可能是损坏的
+        printf "%b✗ Hysteria 二进制文件可能损坏 (大小: %s bytes)%b\n" "${RED}" "$size" "${NC}"
+        return 1
+    fi
+    
+    # 检查版本命令
+    if ! /usr/local/bin/hysteria version >/dev/null 2>&1; then
+        printf "%b✗ Hysteria 版本命令执行失败%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    # 检查管理脚本
+    if [ ! -f "/root/hysteria/main.sh" ]; then
+        printf "%b✗ 主管理脚本不存在%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    if [ ! -f "/root/hysteria/server.sh" ]; then
+        printf "%b✗ 服务端管理脚本不存在%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    if [ ! -f "/root/hysteria/client.sh" ]; then
+        printf "%b✗ 客户端管理脚本不存在%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    # 检查默认服务文件
+    if [ ! -f "/etc/systemd/system/hysteria-server.service" ]; then
+        printf "%b✗ 默认服务文件不存在%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    printf "%b✓ 安装验证通过%b\n" "${GREEN}" "${NC}"
+    return 0
+}
 
 # 创建systemd服务
 create_systemd_service() {
@@ -2936,15 +2744,6 @@ EOF
 
     systemctl daemon-reload
     systemctl enable hysteria-server
-    
-    # 创建h2命令别名
-    if [ -f "/root/.bashrc" ]; then
-        if ! grep -q "alias h2=" /root/.bashrc; then
-            echo "alias h2='bash /root/hysteria/main.sh'" >> /root/.bashrc
-            printf "%b已添加h2命令别名到.bashrc%b\n" "${GREEN}" "${NC}"
-        fi
-    fi
-    
     printf "%bSystemd服务创建完成%b\n" "${GREEN}" "${NC}"
 }
 
