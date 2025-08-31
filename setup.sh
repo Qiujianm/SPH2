@@ -1587,8 +1587,9 @@ main_menu() {
         echo "5. 启动/停止/重启所有实例"
         echo "6. 查看所有实例状态"
         echo "7. 全自动生成单实例配置"
+        echo "8. 清理所有旧客户端服务"
         echo "0. 退出"
-        read -p "请选择[0-7]: " opt
+        read -p "请选择[0-8]: " opt
         case "$opt" in
             1) generate_instances_batch ;;
             2) list_instances_and_delete; read -p "按回车返回..." ;;
@@ -2833,6 +2834,12 @@ cleanup_old_installation() {
     rm -f /root/config_*.yaml
     rm -f /var/run/hysteria-server-manager.pid
     
+    # 清理h2命令
+    rm -f /usr/local/bin/h2
+    if [ -f "/root/.bashrc" ]; then
+        sed -i '/alias h2=/d' /root/.bashrc 2>/dev/null || true
+    fi
+    
     # 重新加载systemd
     printf "%b重新加载systemd...%b\n" "${YELLOW}" "${NC}"
     systemctl daemon-reload
@@ -3034,6 +3041,22 @@ EOF
 
     systemctl daemon-reload
     systemctl enable hysteria-server
+    
+    # 创建h2命令别名
+    if [ -f "/root/.bashrc" ]; then
+        if ! grep -q "alias h2=" /root/.bashrc; then
+            echo "alias h2='bash /root/hysteria/main.sh'" >> /root/.bashrc
+            printf "%b已添加h2命令别名到.bashrc%b\n" "${GREEN}" "${NC}"
+        fi
+    fi
+    
+    # 创建全局h2命令
+    cat > /usr/local/bin/h2 << 'EOF'
+#!/bin/bash
+bash /root/hysteria/main.sh
+EOF
+    chmod +x /usr/local/bin/h2
+    
     printf "%bSystemd服务创建完成%b\n" "${GREEN}" "${NC}"
 }
 
