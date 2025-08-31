@@ -2709,6 +2709,7 @@ generate_config() {
   ],
   "route": { "final": "auto_s5" }
 }
+EOF
 
 # 多端口=多出口：每个端口绑定一个上游 SOCKS5（端口=出口）
 generate_config_port_map() {
