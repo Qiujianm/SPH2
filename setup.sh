@@ -414,19 +414,21 @@ RestartSec=5
 User=root
 PIDFile=/var/run/hysteria-server-manager.pid
 # 资源限制优化
-MemoryMax=2G
-CPUQuota=80%
-Nice=5
-IOSchedulingClass=1
-IOSchedulingPriority=4
+MemoryMax=1G
+CPUQuota=30%
+Nice=10
+IOSchedulingClass=2
+IOSchedulingPriority=7
+TasksMax=100
+LimitNOFILE=1024
 # 进程管理
 KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=60
 # 环境变量
-Environment="HY2_BATCH_SIZE=15"
+Environment="HY2_BATCH_SIZE=8"
 Environment="HY2_WRITE_TMP=1"
-Environment="HY2_SYNC_EVERY=20"
+Environment="HY2_SYNC_EVERY=10"
 Environment="HY2_WRITE_SLEEP_MS=50"
 Environment="HY2_IONICE=1"
 Environment="HY2_ENABLE_RUNTIME=1"
@@ -1618,8 +1620,8 @@ EOF
                 sleep 1
             fi
             
-            # 后台启动hysteria进程
-            nohup $HYSTERIA_BIN server -c "$config_file" >/dev/null 2>&1 &
+            # 后台启动hysteria进程（降低优先级）
+            ionice -c2 -n7 nice -n 10 nohup $HYSTERIA_BIN server -c "$config_file" >/dev/null 2>&1 &
             local pid=$!
             
             # 等待一下确保进程启动
@@ -1885,16 +1887,53 @@ fi
 pids=()
 config_count=0
 
-for cfg in "$CONFIG_DIR"/*.json; do
-    if [ -f "$cfg" ]; then
+# 获取配置文件列表
+config_files=($(find "$CONFIG_DIR" -name "*.json" -type f | sort))
+total_configs=${#config_files[@]}
+
+if [ $total_configs -eq 0 ]; then
+    echo "未找到客户端配置文件"
+    exit 1
+fi
+
+echo "找到 $total_configs 个客户端配置文件，开始分批启动..."
+
+# 智能分批启动
+if [ $total_configs -le 30 ]; then
+    batch_size=10
+    sleep_interval=2
+elif [ $total_configs -le 100 ]; then
+    batch_size=15
+    sleep_interval=3
+else
+    batch_size=20
+    sleep_interval=4
+fi
+
+for ((i=0; i<total_configs; i+=batch_size)); do
+    batch_end=$((i + batch_size))
+    if [ $batch_end -gt $total_configs ]; then
+        batch_end=$total_configs
+    fi
+    
+    echo "启动批次 $((i/batch_size + 1)) (配置 $((i+1))-$batch_end/$total_configs)..."
+    
+    for ((j=i; j<batch_end; j++)); do
+        cfg="${config_files[j]}"
         config_count=$((config_count + 1))
         
         echo "Starting client with config: $cfg (${config_count})"
-        "$HYSTERIA_BIN" client -c "$cfg" &
+        # 降低进程优先级
+        ionice -c2 -n7 nice -n 10 "$HYSTERIA_BIN" client -c "$cfg" &
         pids+=($!)
         
-        # 减少延迟，提高启动速度
-        sleep 0.1
+        # 轻微节流
+        sleep 0.2
+    done
+    
+    if [ $batch_end -lt $total_configs ]; then
+        echo "已启动 $batch_end/$total_configs 个配置，暂停 ${sleep_interval} 秒..."
+        sleep $sleep_interval
     fi
 done
 
@@ -1920,12 +1959,18 @@ After=network.target
 Type=simple
 ExecStart=/usr/local/bin/hysteria-client-manager.sh
 Restart=always
-RestartSec=3
+RestartSec=5
 User=root
 PIDFile=/var/run/hysteria-client-manager.pid
-Nice=-10
-IOSchedulingClass=1
-IOSchedulingPriority=4
+# 资源限制优化
+MemoryMax=1G
+CPUQuota=30%
+Nice=10
+IOSchedulingClass=2
+IOSchedulingPriority=7
+TasksMax=100
+LimitNOFILE=1024
+TimeoutStopSec=60
 
 [Install]
 WantedBy=multi-user.target
