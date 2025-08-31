@@ -533,7 +533,48 @@ generate_instances_batch() {
         proxy_url="http://$proxy_user:$proxy_pass@$proxy_ip:$proxy_port"
         config_file="$CONFIG_OUT_DIR/config_${server_port}.yaml"
 
-        cat >"$config_file" <<EOF
+        # 根据部署模式生成不同的服务端配置
+        if [[ "$deploy_mode" == "1" ]]; then
+            # 双端同机模式：服务端只监听本地回环
+            cat >"$config_file" <<EOF
+listen: 127.0.0.1:$server_port
+
+tls:
+  cert: $crt
+  key: $key
+
+auth:
+  type: password
+  password: $password
+
+masquerade:
+  proxy:
+    url: https://www.bing.com
+    rewriteHost: true
+
+quic:
+  initStreamReceiveWindow: 26843545
+  maxStreamReceiveWindow: 26843545
+  initConnReceiveWindow: 67108864
+  maxConnReceiveWindow: 67108864
+
+bandwidth:
+  up: ${up_bw} mbps
+  down: ${down_bw} mbps
+
+outbounds:
+  - name: my_proxy
+    type: http
+    http:
+      url: $proxy_url
+
+acl:
+  inline:
+    - my_proxy(all)
+EOF
+        else
+            # 双端不同机模式：服务端监听所有接口
+            cat >"$config_file" <<EOF
 listen: :$server_port
 
 tls:
@@ -569,6 +610,7 @@ acl:
   inline:
     - my_proxy(all)
 EOF
+        fi
 
         # 收集端口和配置文件信息
         ports_to_create+=("$server_port")
@@ -615,7 +657,14 @@ EOF
 EOF
         echo -e "\n${GREEN}已生成端口 $server_port 实例，密码：$password"
         echo "服务端配置: $config_file"
-        echo "客户端配置: $client_cfg"
+        if [[ "$deploy_mode" == "1" ]]; then
+            echo -e "${YELLOW}双端同机模式 - 代理端口：${NC}"
+            echo -e "${YELLOW}  Hysteria2协议: 127.0.0.1:$server_port${NC}"
+            echo -e "${YELLOW}  HTTP代理: 0.0.0.0:$server_port${NC}"
+            echo -e "${YELLOW}  SOCKS5代理: 0.0.0.0:$server_port${NC}"
+        elif [[ "$deploy_mode" == "2" ]]; then
+            echo "客户端配置: $client_cfg"
+        fi
         echo "--------------------------------------${NC}"
 
         created_count=$((created_count + 1))
@@ -1032,10 +1081,11 @@ manage_all_instances_internal() {
     echo -e "${YELLOW}选择管理方式：${NC}"
     echo "1. 使用统一服务管理（如果使用统一服务）"
     echo "2. 使用多实例服务管理（如果使用多实例服务）"
-    echo "3. 自动检测并管理（推荐）"
-    read -p "请选择 [1-3]: " manage_method
+    echo "3. 直接启动进程（速度快，但重启后需要手动启动）"
+    echo "4. 自动检测并管理（推荐）"
+    read -p "请选择 [1-4]: " manage_method
     
-    case "$manage_method" in
+            case "$manage_method" in
         1)
             # 统一服务管理
             case "$act" in
@@ -1094,6 +1144,61 @@ manage_all_instances_internal() {
             done < <(ls $CONFIG_DIR/config_*.yaml 2>/dev/null)
             ;;
         3)
+            # 直接启动进程管理
+            while IFS= read -r f; do
+                port=$(basename "$f" | sed 's/^config_//;s/\.yaml$//')
+                config_file="$f"
+                case "$act" in
+                    1) 
+                        # 检查是否已有进程在运行
+                        if pgrep -f "hysteria.*server.*-c.*$config_file" >/dev/null; then
+                            echo -e "${YELLOW}端口 $port 的进程已在运行，跳过${NC}"
+                            continue
+                        fi
+                        
+                        # 后台启动hysteria进程
+                        nohup $HYSTERIA_BIN server -c "$config_file" >/dev/null 2>&1 &
+                        local pid=$!
+                        
+                        # 等待一下确保进程启动
+                        sleep 0.5
+                        
+                        # 检查进程是否成功启动
+                        if kill -0 "$pid" 2>/dev/null; then
+                            echo -e "${GREEN}✓ 端口 $port 的hysteria进程启动成功 (PID: $pid)${NC}"
+                        else
+                            echo -e "${RED}✗ 端口 $port 的hysteria进程启动失败${NC}"
+                        fi
+                        ;;
+                    2) 
+                        # 停止进程
+                        if pkill -f "hysteria.*server.*-c.*$config_file" >/dev/null 2>&1; then
+                            echo -e "${YELLOW}✓ 已停止端口 $port 的进程${NC}"
+                        else
+                            echo -e "${RED}✗ 停止端口 $port 的进程失败${NC}"
+                        fi
+                        ;;
+                    3) 
+                        # 重启进程
+                        if pkill -f "hysteria.*server.*-c.*$config_file" >/dev/null 2>&1; then
+                            sleep 1
+                            nohup $HYSTERIA_BIN server -c "$config_file" >/dev/null 2>&1 &
+                            local pid=$!
+                            sleep 0.5
+                            if kill -0 "$pid" 2>/dev/null; then
+                                echo -e "${GREEN}✓ 端口 $port 的hysteria进程重启成功 (PID: $pid)${NC}"
+                            else
+                                echo -e "${RED}✗ 端口 $port 的hysteria进程重启失败${NC}"
+                            fi
+                        else
+                            echo -e "${RED}✗ 停止端口 $port 的进程失败${NC}"
+                        fi
+                        ;;
+                    *) echo -e "${RED}无效选择${NC}" ;;
+                esac
+            done < <(ls $CONFIG_DIR/config_*.yaml 2>/dev/null)
+            ;;
+        4)
             # 自动检测并管理
             if systemctl is-active --quiet hysteria-server-manager.service 2>/dev/null; then
                 # 是统一服务
@@ -1433,7 +1538,7 @@ acl:
     if [[ "$deploy_mode" == "1" ]]; then
         # 双端同机模式：服务端直接提供HTTP/SOCKS5代理
         cat >"$config_file" <<EOF
-listen: $server_listen
+listen: 127.0.0.1:$server_port
 
 tls:
   cert: $crt
@@ -1457,17 +1562,6 @@ quic:
 bandwidth:
   up: ${up_bw} mbps
   down: ${down_bw} mbps
-
-http:
-  listen: 0.0.0.0:$server_port
-  username: $proxy_username
-  password: $proxy_password
-  realm: $http_realm
-
-socks5:
-  listen: 0.0.0.0:$server_port
-  username: $proxy_username
-  password: $proxy_password
 $proxy_config
 EOF
     else
@@ -1540,10 +1634,96 @@ EOF
             ;;
     esac
 
-    if [[ "$deploy_mode" == "2" ]]; then
-        # 双端不同机模式：生成客户端配置文件
+    # 根据部署模式生成客户端配置
+    if [[ "$deploy_mode" == "1" ]]; then
+        # 双端同机模式：客户端监听外部端口提供HTTP/SOCKS5代理
         local client_cfg="$CLIENT_OUT_DIR/${domain}_${server_port}.json"
         cat >"$client_cfg" <<EOF
+{
+  "server": "127.0.0.1:$server_port",
+  "auth": "$password",
+  "transport": {
+    "type": "udp",
+    "udp": {
+      "hopInterval": "10s"
+    }
+  },
+  "tls": {
+    "sni": "www.bing.com",
+    "insecure": true,
+    "alpn": ["h3"]
+  },
+  "quic": {
+    "initStreamReceiveWindow": 26843545,
+    "maxStreamReceiveWindow": 26843545,
+    "initConnReceiveWindow": 67108864,
+    "maxConnReceiveWindow": 67108864
+  },
+  "bandwidth": {
+    "up": "${up_bw} mbps",
+    "down": "${down_bw} mbps"
+  },
+  "http": {
+    "listen": "0.0.0.0:$server_port",
+    "username": "$proxy_username",
+    "password": "$proxy_password",
+    "realm": "$http_realm"
+  },
+  "socks5": {
+    "listen": "0.0.0.0:$server_port",
+    "username": "$proxy_username",
+    "password": "$proxy_password"
+  }
+}
+EOF
+    elif [[ "$deploy_mode" == "2" ]]; then
+        # 双端不同机模式：客户端连接到远程服务器
+        # 根据部署模式生成客户端配置
+        if [[ "$deploy_mode" == "1" ]]; then
+            # 双端同机模式：客户端监听外部端口提供HTTP/SOCKS5代理
+            local client_cfg="$CLIENT_OUT_DIR/${domain}_${server_port}.json"
+            cat >"$client_cfg" <<EOF
+{
+  "server": "127.0.0.1:$server_port",
+  "auth": "$password",
+  "transport": {
+    "type": "udp",
+    "udp": {
+      "hopInterval": "10s"
+    }
+  },
+  "tls": {
+    "sni": "www.bing.com",
+    "insecure": true,
+    "alpn": ["h3"]
+  },
+  "quic": {
+    "initStreamReceiveWindow": 26843545,
+    "maxStreamReceiveWindow": 26843545,
+    "initConnReceiveWindow": 67108864,
+    "maxConnReceiveWindow": 67108864
+  },
+  "bandwidth": {
+    "up": "${up_bw} mbps",
+    "down": "${down_bw} mbps"
+  },
+  "http": {
+    "listen": "0.0.0.0:$server_port",
+    "username": "$proxy_username",
+    "password": "$proxy_password",
+    "realm": "$http_realm"
+  },
+  "socks5": {
+    "listen": "0.0.0.0:$server_port",
+    "username": "$proxy_username",
+    "password": "$proxy_password"
+  }
+}
+EOF
+        elif [[ "$deploy_mode" == "2" ]]; then
+            # 双端不同机模式：客户端连接到远程服务器
+            local client_cfg="$CLIENT_OUT_DIR/${domain}_${server_port}.json"
+            cat >"$client_cfg" <<EOF
 {
   "server": "$server_address:$server_port",
   "auth": "$password",
@@ -1581,6 +1761,7 @@ EOF
   }
 }
 EOF
+        fi
     fi
 
     echo -e "${GREEN}实例已创建并启动。${NC}"
