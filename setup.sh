@@ -618,99 +618,23 @@ EOF
             ;;
     esac
     
-    # 双端同机模式下自动启动客户端
+    # 双端同机模式下清理可能存在的旧客户端服务
     if [[ "$deploy_mode" == "1" ]]; then
-        echo -e "${YELLOW}检测到双端同机模式，正在自动启动客户端服务...${NC}"
+        echo -e "${YELLOW}检测到双端同机模式，正在清理可能存在的旧客户端服务...${NC}"
         
-        # 检查客户端服务是否存在
-        if systemctl list-unit-files | grep -q "hysteria-client-manager.service"; then
-            if systemctl is-active --quiet hysteria-client-manager.service 2>/dev/null; then
-                echo -e "${GREEN}✓ 客户端服务已在运行${NC}"
-            else
-                echo -e "${YELLOW}正在启动客户端服务...${NC}"
-                if systemctl start hysteria-client-manager.service; then
-                    echo -e "${GREEN}✓ 客户端服务启动成功${NC}"
-                else
-                    echo -e "${RED}✗ 客户端服务启动失败${NC}"
-                    echo -e "${YELLOW}请手动启动客户端服务：systemctl start hysteria-client-manager.service${NC}"
-                fi
-            fi
-        else
-            echo -e "${YELLOW}客户端服务未安装，正在创建并启动...${NC}"
-            
-            # 创建客户端启动脚本
-            CLIENT_SCRIPT="/usr/local/bin/hysteria-client-manager.sh"
-            cat > "$CLIENT_SCRIPT" <<'EOF'
-#!/bin/bash
-# Hysteria Client Manager Script
-
-CONFIG_DIR="/root"
-HYSTERIA_BIN="/usr/local/bin/hysteria"
-PID_FILE="/var/run/hysteria-client-manager.pid"
-
-# 创建PID文件目录
-mkdir -p "$(dirname "$PID_FILE")"
-
-# 停止已存在的进程
-if [ -f "$PID_FILE" ]; then
-    pkill -F "$PID_FILE" 2>/dev/null || true
-    rm -f "$PID_FILE"
-fi
-
-# 启动所有配置文件
-pids=()
-config_count=0
-
-for cfg in "$CONFIG_DIR"/*.json; do
-    if [ -f "$cfg" ]; then
-        config_count=$((config_count + 1))
+        # 停止并禁用客户端服务
+        systemctl stop hysteria-client-manager.service 2>/dev/null || true
+        systemctl disable hysteria-client-manager.service 2>/dev/null || true
         
-        echo "Starting client with config: $cfg (${config_count})"
-        "$HYSTERIA_BIN" client -c "$cfg" &
-        pids+=($!)
+        # 停止所有客户端实例
+        systemctl stop hysteriaclient@* 2>/dev/null || true
+        systemctl disable hysteriaclient@* 2>/dev/null || true
         
-        sleep 0.1
-    fi
-done
-
-echo "总共启动了 $config_count 个客户端配置"
-
-# 保存PID到文件
-echo "${pids[@]}" > "$PID_FILE"
-
-# 等待所有进程
-wait
-EOF
-            chmod +x "$CLIENT_SCRIPT"
-            
-            # 创建systemd服务
-            SERVICE_FILE="/etc/systemd/system/hysteria-client-manager.service"
-            cat > "$SERVICE_FILE" <<EOF
-[Unit]
-Description=Hysteria Client Manager - Manages all client configurations
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/hysteria-client-manager.sh
-Restart=always
-RestartSec=3
-User=root
-PIDFile=/var/run/hysteria-client-manager.pid
-
-[Install]
-WantedBy=multi-user.target
-EOF
-            
-            systemctl daemon-reload
-            
-            if systemctl start hysteria-client-manager.service; then
-                echo -e "${GREEN}✓ 客户端服务创建并启动成功${NC}"
-            else
-                echo -e "${RED}✗ 客户端服务启动失败${NC}"
-                echo -e "${YELLOW}请手动启动客户端服务：systemctl start hysteria-client-manager.service${NC}"
-            fi
-        fi
+        # 杀死客户端进程
+        pkill -f "hysteria client" 2>/dev/null || true
+        
+        echo -e "${GREEN}✓ 双端同机模式：服务端直接提供HTTP/SOCKS5代理服务${NC}"
+        echo -e "${YELLOW}提示：无需客户端服务，可直接通过服务端端口使用代理${NC}"
     fi
 }
 
