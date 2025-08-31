@@ -112,6 +112,41 @@ SYSTEMD_DIR="/etc/systemd/system"
 CONFIG_DIR="/etc/hysteria"
 DEFAULT_BATCH_SIZE=10
 
+# 写入节流与临时目录分批落盘（可通过环境变量控制）
+WRITE_TMP="${HY2_WRITE_TMP:-1}"
+SYNC_EVERY="${HY2_SYNC_EVERY:-15}"
+WRITE_SLEEP_MS="${HY2_WRITE_SLEEP_MS:-100}"
+ENABLE_RUNTIME="${HY2_ENABLE_RUNTIME:-0}"
+USE_IONICE="${HY2_IONICE:-1}"
+
+if [ "$WRITE_TMP" = "1" ]; then
+    STAGE_ETC="/dev/shm/hy2_build/etc/hysteria"
+    STAGE_ROOT="/dev/shm/hy2_build/root"
+    mkdir -p "$STAGE_ETC" "$STAGE_ROOT"
+    CONFIG_OUT_DIR="$STAGE_ETC"
+    CLIENT_OUT_DIR="$STAGE_ROOT"
+else
+    CONFIG_OUT_DIR="$CONFIG_DIR"
+    CLIENT_OUT_DIR="/root"
+fi
+
+rsync_safe() {
+    if [ "$USE_IONICE" = "1" ]; then
+        ionice -c2 -n7 nice -n 10 rsync -a "$1"/ "$2"/
+    else
+        rsync -a "$1"/ "$2"/
+    fi
+}
+
+systemctl_safe() {
+    if [ "$USE_IONICE" = "1" ]; then
+        ionice -c2 -n7 nice -n 10 systemctl "$@"
+    else
+        systemctl "$@"
+    fi
+}
+DEFAULT_BATCH_SIZE=10
+
 check_env() {
     echo -e "${YELLOW}检查环境依赖...${NC}"
     
@@ -197,7 +232,9 @@ WantedBy=multi-user.target
 EOF
     
     # 启用服务（不重新加载systemd）
-    if systemctl enable "hysteria-server@${port}.service" >/dev/null 2>&1; then
+    enable_args=""
+    [ "$ENABLE_RUNTIME" = "1" ] && enable_args="--runtime"
+    if systemctl_safe enable $enable_args "hysteria-server@${port}.service" >/dev/null 2>&1; then
         echo -e "${GREEN}服务 hysteria-server@${port}.service 已启用${NC}"
     else
         echo -e "${RED}启用服务 hysteria-server@${port}.service 失败${NC}"
@@ -231,7 +268,9 @@ WantedBy=multi-user.target
 EOF
     
     # 启用服务（不重新加载systemd）
-    if systemctl enable "hysteria-server@${port}.service" >/dev/null 2>&1; then
+    enable_args=""
+    [ "$ENABLE_RUNTIME" = "1" ] && enable_args="--runtime"
+    if systemctl_safe enable $enable_args "hysteria-server@${port}.service" >/dev/null 2>&1; then
         echo -e "${GREEN}服务 hysteria-server@${port}.service 已启用${NC}"
     else
         echo -e "${RED}启用服务 hysteria-server@${port}.service 失败${NC}"
@@ -428,6 +467,7 @@ generate_instances_batch() {
     # 收集要创建的端口列表
     ports_to_create=()
     configs_to_create=()
+    created_count=0
     
     while read -r proxy_raw; do
         [[ -z "$proxy_raw" ]] && continue
@@ -441,7 +481,7 @@ generate_instances_batch() {
         current_port=$((current_port + 1))
         password=$(openssl rand -base64 16)
         proxy_url="http://$proxy_user:$proxy_pass@$proxy_ip:$proxy_port"
-        config_file="$CONFIG_DIR/config_${server_port}.yaml"
+        config_file="$CONFIG_OUT_DIR/config_${server_port}.yaml"
 
         cat >"$config_file" <<EOF
 listen: :$server_port
@@ -484,7 +524,7 @@ EOF
         ports_to_create+=("$server_port")
         configs_to_create+=("$config_file")
 
-        local client_cfg="/root/${domain}_${server_port}.json"
+        local client_cfg="$CLIENT_OUT_DIR/${domain}_${server_port}.json"
         cat >"$client_cfg" <<EOF
 {
   "server": "$server_address:$server_port",
@@ -527,7 +567,27 @@ EOF
         echo "服务端配置: $config_file"
         echo "客户端配置: $client_cfg"
         echo "--------------------------------------${NC}"
+
+        created_count=$((created_count + 1))
+        # 每写入一定数量后同步到磁盘，避免写入风暴
+        if [ "$WRITE_TMP" = "1" ] && [ $created_count -ge $SYNC_EVERY ]; then
+            echo -e "${YELLOW}正在分批落盘...${NC}"
+            mkdir -p "$CONFIG_DIR" 
+            rsync_safe "$STAGE_ETC" "$CONFIG_DIR"
+            rsync_safe "$STAGE_ROOT" "/root"
+            created_count=0
+        fi
+        # 轻微节流
+        [ "$WRITE_SLEEP_MS" -gt 0 ] && sleep 0.1
     done <<< "$proxies"
+
+    # 最终落盘
+    if [ "$WRITE_TMP" = "1" ]; then
+        echo -e "${YELLOW}正在最终落盘...${NC}"
+        mkdir -p "$CONFIG_DIR"
+        rsync_safe "$STAGE_ETC" "$CONFIG_DIR"
+        rsync_safe "$STAGE_ROOT" "/root"
+    fi
     
     # 询问启动方式
     echo -e "${YELLOW}选择启动方式：${NC}"
@@ -549,7 +609,7 @@ EOF
             
             # 一次性重新加载systemd配置
             echo -e "${YELLOW}正在重新加载systemd配置...${NC}"
-            systemctl daemon-reload
+            systemctl_safe daemon-reload
             
             # 批量启动所有服务（优化启动策略）
             echo -e "${YELLOW}正在批量启动所有服务...${NC}"
@@ -565,12 +625,12 @@ EOF
             for i in "${!ports_to_create[@]}"; do
                 local port="${ports_to_create[$i]}"
                 
-                if systemctl start "hysteria-server@${port}.service"; then
+                if systemctl_safe start "hysteria-server@${port}.service"; then
                     echo -e "${GREEN}✓ 服务 hysteria-server@${port}.service 启动成功${NC}"
                     ((started_count++))
                 else
                     echo -e "${RED}✗ 服务 hysteria-server@${port}.service 启动失败${NC}"
-                    systemctl status "hysteria-server@${port}.service" --no-pager
+                    systemctl_safe status "hysteria-server@${port}.service" --no-pager
                 fi
                 
                 # 每启动一批后暂停一下，避免系统负载过高
@@ -1319,7 +1379,7 @@ acl:
         server_listen=":$server_port"  # 双端不同机：监听所有接口
     fi
 
-    local config_file="$CONFIG_DIR/config_${server_port}.yaml"
+    local config_file="$CONFIG_OUT_DIR/config_${server_port}.yaml"
     if [[ "$deploy_mode" == "1" ]]; then
         # 双端同机模式：服务端直接提供HTTP/SOCKS5代理
         cat >"$config_file" <<EOF
@@ -1401,7 +1461,7 @@ EOF
         1)
             # 多实例服务模式
             create_systemd_unit "$server_port" "$config_file"
-            systemctl restart "hysteria-server@${server_port}.service"
+            systemctl_safe restart "hysteria-server@${server_port}.service"
             ;;
         2)
             # 直接进程模式
@@ -1432,7 +1492,7 @@ EOF
 
     if [[ "$deploy_mode" == "2" ]]; then
         # 双端不同机模式：生成客户端配置文件
-        local client_cfg="/root/${domain}_${server_port}.json"
+        local client_cfg="$CLIENT_OUT_DIR/${domain}_${server_port}.json"
         cat >"$client_cfg" <<EOF
 {
   "server": "$server_address:$server_port",
