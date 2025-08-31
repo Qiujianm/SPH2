@@ -563,6 +563,101 @@ EOF
             done
             ;;
     esac
+    
+    # 双端同机模式下自动启动客户端
+    if [[ "$deploy_mode" == "1" ]]; then
+        echo -e "${YELLOW}检测到双端同机模式，正在自动启动客户端服务...${NC}"
+        
+        # 检查客户端服务是否存在
+        if systemctl list-unit-files | grep -q "hysteria-client-manager.service"; then
+            if systemctl is-active --quiet hysteria-client-manager.service 2>/dev/null; then
+                echo -e "${GREEN}✓ 客户端服务已在运行${NC}"
+            else
+                echo -e "${YELLOW}正在启动客户端服务...${NC}"
+                if systemctl start hysteria-client-manager.service; then
+                    echo -e "${GREEN}✓ 客户端服务启动成功${NC}"
+                else
+                    echo -e "${RED}✗ 客户端服务启动失败${NC}"
+                    echo -e "${YELLOW}请手动启动客户端服务：systemctl start hysteria-client-manager.service${NC}"
+                fi
+            fi
+        else
+            echo -e "${YELLOW}客户端服务未安装，正在创建并启动...${NC}"
+            
+            # 创建客户端启动脚本
+            CLIENT_SCRIPT="/usr/local/bin/hysteria-client-manager.sh"
+            cat > "$CLIENT_SCRIPT" <<'EOF'
+#!/bin/bash
+# Hysteria Client Manager Script
+
+CONFIG_DIR="/root"
+HYSTERIA_BIN="/usr/local/bin/hysteria"
+PID_FILE="/var/run/hysteria-client-manager.pid"
+
+# 创建PID文件目录
+mkdir -p "$(dirname "$PID_FILE")"
+
+# 停止已存在的进程
+if [ -f "$PID_FILE" ]; then
+    pkill -F "$PID_FILE" 2>/dev/null || true
+    rm -f "$PID_FILE"
+fi
+
+# 启动所有配置文件
+pids=()
+config_count=0
+
+for cfg in "$CONFIG_DIR"/*.json; do
+    if [ -f "$cfg" ]; then
+        config_count=$((config_count + 1))
+        
+        echo "Starting client with config: $cfg (${config_count})"
+        "$HYSTERIA_BIN" client -c "$cfg" &
+        pids+=($!)
+        
+        sleep 0.1
+    fi
+done
+
+echo "总共启动了 $config_count 个客户端配置"
+
+# 保存PID到文件
+echo "${pids[@]}" > "$PID_FILE"
+
+# 等待所有进程
+wait
+EOF
+            chmod +x "$CLIENT_SCRIPT"
+            
+            # 创建systemd服务
+            SERVICE_FILE="/etc/systemd/system/hysteria-client-manager.service"
+            cat > "$SERVICE_FILE" <<EOF
+[Unit]
+Description=Hysteria Client Manager - Manages all client configurations
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/hysteria-client-manager.sh
+Restart=always
+RestartSec=3
+User=root
+PIDFile=/var/run/hysteria-client-manager.pid
+
+[Install]
+WantedBy=multi-user.target
+EOF
+            
+            systemctl daemon-reload
+            
+            if systemctl start hysteria-client-manager.service; then
+                echo -e "${GREEN}✓ 客户端服务创建并启动成功${NC}"
+            else
+                echo -e "${RED}✗ 客户端服务启动失败${NC}"
+                echo -e "${YELLOW}请手动启动客户端服务：systemctl start hysteria-client-manager.service${NC}"
+            fi
+        fi
+    fi
 }
 
 list_instances_and_delete() {
@@ -1168,9 +1263,59 @@ acl:
     - my_proxy(all)"
     fi
 
+    # 根据部署模式设置服务端监听地址
+    local server_listen=""
+    if [[ "$deploy_mode" == "1" ]]; then
+        server_listen=":$server_port"  # 双端同机：直接监听所有接口
+    else
+        server_listen=":$server_port"  # 双端不同机：监听所有接口
+    fi
+
     local config_file="$CONFIG_DIR/config_${server_port}.yaml"
-    cat >"$config_file" <<EOF
-listen: :$server_port
+    if [[ "$deploy_mode" == "1" ]]; then
+        # 双端同机模式：服务端直接提供HTTP/SOCKS5代理
+        cat >"$config_file" <<EOF
+listen: $server_listen
+
+tls:
+  cert: $crt
+  key: $key
+
+auth:
+  type: password
+  password: $password
+
+masquerade:
+  proxy:
+    url: https://www.bing.com
+    rewriteHost: true
+
+quic:
+  initStreamReceiveWindow: 26843545
+  maxStreamReceiveWindow: 26843545
+  initConnReceiveWindow: 67108864
+  maxConnReceiveWindow: 67108864
+
+bandwidth:
+  up: ${up_bw} mbps
+  down: ${down_bw} mbps
+
+http:
+  listen: 0.0.0.0:$server_port
+  username: $proxy_username
+  password: $proxy_password
+  realm: $http_realm
+
+socks5:
+  listen: 0.0.0.0:$server_port
+  username: $proxy_username
+  password: $proxy_password
+$proxy_config
+EOF
+    else
+        # 双端不同机模式：服务端只提供Hysteria协议
+        cat >"$config_file" <<EOF
+listen: $server_listen
 
 tls:
   cert: $crt
@@ -1196,6 +1341,7 @@ bandwidth:
   down: ${down_bw} mbps
 $proxy_config
 EOF
+    fi
 
     # 询问启动方式
     echo -e "${YELLOW}选择启动方式：${NC}"
@@ -1260,8 +1406,10 @@ EOF
             ;;
     esac
 
-    local client_cfg="/root/${domain}_${server_port}.json"
-    cat >"$client_cfg" <<EOF
+    if [[ "$deploy_mode" == "2" ]]; then
+        # 双端不同机模式：生成客户端配置文件
+        local client_cfg="/root/${domain}_${server_port}.json"
+        cat >"$client_cfg" <<EOF
 {
   "server": "$server_address:$server_port",
   "auth": "$password",
@@ -1299,13 +1447,30 @@ EOF
   }
 }
 EOF
+    fi
 
     echo -e "${GREEN}实例已创建并启动。${NC}"
     echo "服务端配置文件: $config_file"
-    echo "客户端配置文件: $client_cfg"
+    if [[ "$deploy_mode" == "2" ]]; then
+        echo "客户端配置文件: $client_cfg"
+    fi
     echo "服务器IP: $domain"
     echo "监听端口: $server_port"
     echo "密码: $password"
+    
+    # 根据部署模式显示信息
+    if [[ "$deploy_mode" == "1" ]]; then
+        echo -e "${YELLOW}双端同机模式 - 服务端直接提供代理服务：${NC}"
+        echo -e "${YELLOW}  HTTP代理: 127.0.0.1:$server_port${NC}"
+        echo -e "${YELLOW}  SOCKS5代理: 127.0.0.1:$server_port${NC}"
+    else
+        echo -e "${YELLOW}双端不同机模式 - 服务端信息：${NC}"
+        echo -e "${YELLOW}  服务器IP: $domain${NC}"
+        echo -e "${YELLOW}  监听端口: $server_port${NC}"
+        echo -e "${YELLOW}  客户端配置文件: /root/${domain}_${server_port}.json${NC}"
+    fi
+    
+
 }
 
 main_menu() {
