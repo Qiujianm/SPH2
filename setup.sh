@@ -55,15 +55,14 @@ main_menu() {
         printf "%b====================================%b\n" "${GREEN}" "${NC}"
         echo "1. 服务端管理"
         echo "2. 客户端管理"
-        echo "3. 中转代理（sing-box 混合端口）"
-        echo "4. 系统优化"
-        echo "5. 检查更新"
-        echo "6. 运行状态"
-        echo "7. 完全卸载"
+        echo "3. 系统优化"
+        echo "4. 检查更新"
+        echo "5. 运行状态"
+        echo "6. 完全卸载"
         echo "0. 退出脚本"
         printf "%b====================================%b\n" "${GREEN}" "${NC}"
         
-        read -t 60 -p "请选择 [0-7]: " choice || {
+        read -t 60 -p "请选择 [0-6]: " choice || {
             printf "\n%b操作超时，退出脚本%b\n" "${YELLOW}" "${NC}"
             exit 1
         }
@@ -71,10 +70,9 @@ main_menu() {
         case $choice in
             1) bash /root/hysteria/server.sh ;;
             2) bash /root/hysteria/client.sh ;;
-            3) bash /root/hysteria/relay.sh ;;
-            4) bash /root/hysteria/config.sh optimize ;;
-            5) bash /root/hysteria/config.sh update ;;
-            6)
+            3) bash /root/hysteria/config.sh optimize ;;
+            4) bash /root/hysteria/config.sh update ;;
+            5)
                 echo -e "${YELLOW}服务端状态:${NC}"
                 systemctl status hysteria-server@* --no-pager 2>/dev/null || echo "没有运行的服务端实例"
                 echo
@@ -82,7 +80,7 @@ main_menu() {
                 systemctl status hysteriaclient@* --no-pager 2>/dev/null || echo "没有运行的客户端实例"
                 read -t 30 -n 1 -s -r -p "按任意键继续..."
                 ;;
-            7) bash ./config.sh uninstall ;;
+            6) bash /root/hysteria/config.sh uninstall ;;
             0) exit 0 ;;
             *)
                 printf "%b无效选择%b\n" "${RED}" "${NC}"
@@ -280,15 +278,16 @@ EOF
     fi
 }
 
-# 创建服务端统一服务
+# 创建服务端统一服务（优化版）
 create_server_unified_service() {
     local unit_file="${SYSTEMD_DIR}/hysteria-server-manager.service"
     local script_file="/usr/local/bin/hysteria-server-manager.sh"
+    local monitor_script="/usr/local/bin/hysteria-monitor.sh"
     
-    # 创建启动脚本
+    # 创建优化的启动脚本
     cat >"$script_file" <<'EOF'
 #!/bin/bash
-# Hysteria Server Manager Script
+# Hysteria Server Manager Script (Optimized for 100+ instances)
 
 CONFIG_DIR="/etc/hysteria"
 HYSTERIA_BIN="/usr/local/bin/hysteria"
@@ -326,9 +325,19 @@ fi
 
 echo "找到 ${#configs[@]} 个配置文件，开始分批启动..."
 
-# 分批启动，每批5个服务
-batch_size=5
+# 智能分批启动：根据配置数量调整批次大小
 total_configs=${#configs[@]}
+if [ $total_configs -le 30 ]; then
+    batch_size=10
+    sleep_interval=2
+elif [ $total_configs -le 100 ]; then
+    batch_size=15
+    sleep_interval=3
+else
+    batch_size=20
+    sleep_interval=4
+fi
+
 started_pids=()
 
 for i in "${!configs[@]}"; do
@@ -336,16 +345,18 @@ for i in "${!configs[@]}"; do
     config_count=$((i + 1))
     
     echo "Starting server with config: $cfg (${config_count}/${total_configs})"
-    "$HYSTERIA_BIN" server -c "$cfg" &
+    
+    # 使用 ionice 和 nice 降低优先级，减少系统负载
+    ionice -c2 -n7 nice -n 10 "$HYSTERIA_BIN" server -c "$cfg" &
     pid=$!
     started_pids+=("$pid")
     
     # 每启动一批后暂停一下，避免系统负载过高
     if (( (i + 1) % batch_size == 0 )) && (( i + 1 < total_configs )); then
-        echo "已启动 $((i + 1))/$total_configs 个服务，暂停 2 秒..."
-        sleep 2
+        echo "已启动 $((i + 1))/$total_configs 个服务，暂停 ${sleep_interval} 秒..."
+        sleep $sleep_interval
     else
-        sleep 0.1
+        sleep 0.2  # 减少间隔时间，提高启动速度
     fi
 done
 
@@ -360,29 +371,65 @@ EOF
     
     chmod +x "$script_file"
     
-    # 创建统一服务文件
+    # 创建监控脚本
+    cat >"$monitor_script" <<'EOF'
+#!/bin/bash
+echo "=== Hysteria2 统一服务监控 ==="
+echo "内存使用:"
+free -h | grep -E "Mem|Swap"
+echo
+echo "CPU使用率:"
+top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1
+echo
+echo "Hysteria进程数量:"
+pgrep -c hysteria
+echo
+echo "文件描述符使用:"
+if pgrep hysteria >/dev/null; then
+    lsof -p $(pgrep hysteria | head -1) 2>/dev/null | wc -l
+else
+    echo "0"
+fi
+echo
+echo "网络连接数:"
+ss -tuln | grep -c ":"
+echo
+echo "服务状态:"
+systemctl is-active hysteria-server-manager.service
+EOF
+    
+    chmod +x "$monitor_script"
+    
+    # 创建优化的统一服务文件
     cat >"$unit_file" <<EOF
 [Unit]
-Description=Hysteria2 Server Manager - Manages all server configurations
+Description=Hysteria2 Server Manager - Manages all server configurations (Optimized)
 After=network.target
 
 [Service]
 Type=simple
 ExecStart=$script_file
 Restart=always
-RestartSec=3
+RestartSec=5
 User=root
 PIDFile=/var/run/hysteria-server-manager.pid
 # 资源限制优化
 MemoryMax=2G
-CPUQuota=50%
+CPUQuota=80%
 Nice=5
 IOSchedulingClass=1
 IOSchedulingPriority=4
 # 进程管理
 KillMode=mixed
 KillSignal=SIGTERM
-TimeoutStopSec=30
+TimeoutStopSec=60
+# 环境变量
+Environment="HY2_BATCH_SIZE=15"
+Environment="HY2_WRITE_TMP=1"
+Environment="HY2_SYNC_EVERY=20"
+Environment="HY2_WRITE_SLEEP_MS=50"
+Environment="HY2_IONICE=1"
+Environment="HY2_ENABLE_RUNTIME=1"
 
 [Install]
 WantedBy=multi-user.target
@@ -394,6 +441,7 @@ EOF
     # 启用服务
     if systemctl enable "hysteria-server-manager.service" >/dev/null 2>&1; then
         echo -e "${GREEN}统一服务 hysteria-server-manager.service 已启用${NC}"
+        echo -e "${GREEN}监控脚本: /usr/local/bin/hysteria-monitor.sh${NC}"
     else
         echo -e "${RED}启用统一服务 hysteria-server-manager.service 失败${NC}"
         return 1
@@ -2588,264 +2636,7 @@ done
 CLIENTEOF
     chmod +x /root/hysteria/client.sh
 
-    # 创建并赋权 relay.sh（sing-box 混合端口中转）
-cat > /root/hysteria/relay.sh << 'RELAYEOF'
-#!/bin/bash
-
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-NC='\033[0m'
-
-SINGBOX_BIN="/usr/local/bin/sing-box"
-SB_CONF_DIR="/etc/sing-box"
-SB_CONF_FILE="/etc/sing-box/config.json"
-SB_SERVICE="/etc/systemd/system/sing-box-relay.service"
-
-ensure_dirs() {
-    mkdir -p "$SB_CONF_DIR"
-}
-
-install_singbox() {
-    if command -v sing-box >/dev/null 2>&1; then
-        echo -e "${GREEN}✓ sing-box 已安装${NC}"
-        return 0
-    fi
-    if [ -x "$SINGBOX_BIN" ]; then
-        echo -e "${GREEN}✓ sing-box 已安装${NC}"
-        return 0
-    fi
-    echo -e "${YELLOW}尝试自动安装 sing-box...${NC}"
-    arch="$(uname -m)"
-    case "$arch" in
-        x86_64|amd64) sb_arch="amd64";;
-        aarch64|arm64) sb_arch="arm64";;
-        *) echo -e "${RED}不支持的架构: $arch，请手动安装 sing-box${NC}"; return 1;;
-    esac
-    tmpdir="$(mktemp -d)"
-    api_url="https://api.github.com/repos/SagerNet/sing-box/releases/latest"
-    tgz_url=$(curl -fsSL "$api_url" | grep -oE "https://[^"]+sing-box-[0-9.]+-linux-$sb_arch.tar.gz" | head -n1)
-    if [ -z "$tgz_url" ]; then
-        tgz_url="https://hub.gitmirror.com/https://github.com/SagerNet/sing-box/releases/latest/download/sing-box-linux-$sb_arch.tar.gz"
-    fi
-    if ! curl -fL --connect-timeout 10 --retry 2 -o "$tmpdir/sing-box.tar.gz" "$tgz_url"; then
-        echo -e "${RED}下载 sing-box 失败，请手动安装${NC}"
-        rm -rf "$tmpdir"; return 1
-    fi
-    tar -xzf "$tmpdir/sing-box.tar.gz" -C "$tmpdir" 2>/dev/null || true
-    # 尝试在解压目录查找二进制
-    sb_path=$(find "$tmpdir" -type f -name sing-box -print -quit)
-    if [ -z "$sb_path" ]; then
-        echo -e "${RED}未找到 sing-box 二进制，请手动安装${NC}"
-        rm -rf "$tmpdir"; return 1
-    fi
-    install -m 0755 "$sb_path" "$SINGBOX_BIN"
-    rm -rf "$tmpdir"
-    if "$SINGBOX_BIN" version >/dev/null 2>&1; then
-        echo -e "${GREEN}✓ sing-box 安装成功${NC}"
-        return 0
-    else
-        echo -e "${RED}sing-box 验证失败，请手动安装${NC}"
-        return 1
-    fi
-}
-
-generate_config() {
-    ensure_dirs
-    read -p "中转监听端口 [18080]: " in_port; in_port=${in_port:-18080}
-    read -p "入站认证用户名 [relayuser]: " in_user; in_user=${in_user:-relayuser}
-    read -p "入站认证密码 [relaypass]: " in_pass; in_pass=${in_pass:-relaypass}
-
-    echo -e "${YELLOW}请粘贴所有上游 SOCKS5（每行: host:port:username:password），输入完毕 Ctrl+D:${NC}"
-    upstreams=""
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        [[ -z "$line" ]] && continue
-        upstreams+="$line"$'\n'
-    done
-
-    # 生成 outbounds 列表
-    ob_json=""
-    tags=()
-    idx=1
-    while IFS= read -r uline; do
-        [[ -z "$uline" ]] && continue
-        IFS=':' read -r h p u pz <<< "$uline"
-        tag="s5-$idx"
-        tags+=("$tag")
-        ob_json+="\n    { \"type\": \"socks\", \"tag\": \"$tag\", \"server\": \"$h\", \"server_port\": $p, \"version\": \"5\", \"username\": \"$u\", \"password\": \"$pz\" },"
-        idx=$((idx+1))
-    done <<< "$upstreams"
-    # 去掉最后一个逗号
-    ob_json=${ob_json%,}
-
-    # 生成 urltest outbound
-    tags_csv=""
-    for t in "${tags[@]}"; do
-        tags_csv+="\"$t\","
-    done
-    tags_csv=${tags_csv%,}
-
-    cat > "$SB_CONF_FILE" <<EOF
-{
-  "log": { "level": "warn" },
-  "inbounds": [
-    {
-      "type": "mixed",
-      "listen": "0.0.0.0",
-      "listen_port": $in_port,
-      "sniff": true,
-      "sniff_override_destination": true,
-      "users": [ { "username": "$in_user", "password": "$in_pass" } ]
-    }
-  ],
-  "outbounds": [
-    { "type": "direct", "tag": "direct" },$ob_json,
-    {
-      "type": "urltest", "tag": "auto_s5",
-      "outbounds": [ $tags_csv ],
-      "url": "http://cp.cloudflare.com/generate_204",
-      "interval": "30s", "tolerance": 50, "timeout": "3s"
-    }
-  ],
-  "route": { "final": "auto_s5" }
-}
-EOF
-
-# 多端口=多出口：每个端口绑定一个上游 SOCKS5（端口=出口）
-generate_config_port_map() {
-    ensure_dirs
-    read -p "监听地址 [0.0.0.0]: " bind_addr; bind_addr=${bind_addr:-0.0.0.0}
-    read -p "是否启用统一入站认证？(y/N): " use_auth
-    users_fragment=""
-    if [[ "$use_auth" == "y" || "$use_auth" == "Y" ]]; then
-        read -p "入站认证用户名: " in_user
-        read -p "入站认证密码: " in_pass
-        users_fragment=", \"users\": [ { \"username\": \"$in_user\", \"password\": \"$in_pass\" } ]"
-    fi
-    echo -e "${YELLOW}是否使用起始端口自动分配？(y/N)${NC}"
-    read -p "选择: " auto_map
-    map_lines=()
-    if [[ "$auto_map" == "y" || "$auto_map" == "Y" ]]; then
-        read -p "起始端口: " start_port
-        echo -e "${YELLOW}粘贴上游 SOCKS5 列表（每行: host:port:username:password），结束 Ctrl+D:${NC}"
-        upstreams=""
-        while IFS= read -r line || [[ -n "$line" ]]; do
-            [[ -z "$line" ]] && continue
-            upstreams+="$line"$'\n'
-        done
-        cur=$start_port
-        while IFS= read -r uline; do
-            [[ -z "$uline" ]] && continue
-            # 组装为 本地端口:host:port:user:pass
-            IFS=':' read -r h p u pwd <<< "$uline"
-            map_lines+=("$cur:$h:$p:$u:$pwd")
-            cur=$((cur+1))
-        done <<< "$upstreams"
-    else
-        echo -e "${YELLOW}输入端口与上游 SOCKS5 映射（每行: 本地端口:host:port:username:password），结束 Ctrl+D:${NC}"
-        while IFS= read -r line || [[ -n "$line" ]]; do
-            [[ -z "$line" ]] && continue
-            map_lines+=("$line")
-        done
-    fi
-
-    # 写入 JSON（逐段构造，避免转义问题）
-    : > "$SB_CONF_FILE"
-    {
-        echo '{'
-        echo '  "log": { "level": "warn" },'
-        echo '  "inbounds": ['
-        first=1
-        for row in "${map_lines[@]}"; do
-            IFS=':' read -r lp h p u pwd <<< "$row"
-            [ -z "$lp" ] && continue
-            if [ $first -eq 0 ]; then echo ','; fi
-            printf '    { "type": "mixed", "listen": "%s", "listen_port": %s, "sniff": true, "sniff_override_destination": true, "tag": "in-%s"%s }' "$bind_addr" "$lp" "$lp" "$users_fragment"
-            first=0
-        done
-        echo
-        echo '  ],'
-        echo '  "outbounds": ['
-        # 先 direct
-        printf '    { "type": "direct", "tag": "direct" }'
-        for i in "${!map_lines[@]}"; do
-            row="${map_lines[$i]}"
-            IFS=':' read -r lp h p u pwd <<< "$row"
-            [ -z "$lp" ] && continue
-            tag="s5-$((i+1))"
-            printf ',\n    { "type": "socks", "tag": "%s", "server": "%s", "server_port": %s, "version": "5", "username": "%s", "password": "%s" }' "$tag" "$h" "$p" "$u" "$pwd"
-        done
-        echo
-        echo '  ],'
-        echo '  "route": {'
-        echo '    "rules": ['
-        first=1
-        for i in "${!map_lines[@]}"; do
-            row="${map_lines[$i]}"
-            IFS=':' read -r lp h p u pwd <<< "$row"
-            [ -z "$lp" ] && continue
-            tag="s5-$((i+1))"
-            if [ $first -eq 0 ]; then echo ','; fi
-            printf '      { "inbound": ["in-%s"], "outbound": "%s" }' "$lp" "$tag"
-            first=0
-        done
-        echo
-        echo '    ],'
-        echo '    "final": "direct"'
-        echo '  }'
-        echo '}'
-    } >> "$SB_CONF_FILE"
-    echo -e "${GREEN}✓ 已生成多端口映射配置：$SB_CONF_FILE${NC}"
-    systemctl daemon-reload
-}
-EOF
-    echo -e "${GREEN}✓ 已生成 $SB_CONF_FILE${NC}"
-
-    cat > "$SB_SERVICE" <<EOF
-[Unit]
-Description=sing-box relay (mixed inbound -> multi SOCKS5)
-After=network.target
-
-[Service]
-ExecStart=/usr/local/bin/sing-box run -c $SB_CONF_FILE
-Restart=always
-RestartSec=2
-NoNewPrivileges=true
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    systemctl daemon-reload
-    echo -e "${GREEN}✓ 已写入 $SB_SERVICE${NC}"
-}
-
-menu() {
-    while true; do
-        echo -e "${GREEN}==== sing-box 中转管理 ====${NC}"
-        echo "1. 安装/检测 sing-box"
-        echo "2. 生成单端口聚合配置（mixed + 多上游测速）"
-        echo "3. 生成多端口绑定上游配置（端口=出口）"
-        echo "4. 启动/重启中转服务"
-        echo "5. 停止中转服务"
-        echo "6. 查看状态"
-        echo "0. 返回"
-        read -p "请选择[0-6]: " c
-        case "$c" in
-            1) install_singbox ;;
-            2) generate_config ;;
-            3) generate_config_port_map ;;
-            4) systemctl enable --now sing-box-relay.service && echo -e "${GREEN}已启动${NC}" || echo -e "${RED}启动失败${NC}" ;;
-            5) systemctl stop sing-box-relay.service && echo -e "${YELLOW}已停止${NC}" || true ;;
-            6) systemctl status sing-box-relay.service --no-pager || true ;;
-            0) exit 0 ;;
-            *) echo -e "${RED}无效选择${NC}" ;;
-        esac
-    done
-}
-
-menu
-RELAYEOF
-    chmod +x /root/hysteria/relay.sh
+    
 
     # 创建并赋权 config.sh
 cat > /root/hysteria/config.sh << 'CONFIGEOF'
