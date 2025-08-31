@@ -2714,52 +2714,79 @@ generate_config() {
 generate_config_port_map() {
     ensure_dirs
     read -p "监听地址 [0.0.0.0]: " bind_addr; bind_addr=${bind_addr:-0.0.0.0}
-    echo -e "${YELLOW}输入端口与上游 SOCKS5 映射（每行: 本地端口:host:port:username:password），结束 Ctrl+D:${NC}"
-    mapping=""
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        [[ -z "$line" ]] && continue
-        mapping+="$line"$'\n'
-    done
+    echo -e "${YELLOW}是否使用起始端口自动分配？(y/N)${NC}"
+    read -p "选择: " auto_map
+    map_lines=()
+    if [[ "$auto_map" == "y" || "$auto_map" == "Y" ]]; then
+        read -p "起始端口: " start_port
+        echo -e "${YELLOW}粘贴上游 SOCKS5 列表（每行: host:port:username:password），结束 Ctrl+D:${NC}"
+        upstreams=""
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            [[ -z "$line" ]] && continue
+            upstreams+="$line"$'\n'
+        done
+        cur=$start_port
+        while IFS= read -r uline; do
+            [[ -z "$uline" ]] && continue
+            # 组装为 本地端口:host:port:user:pass
+            IFS=':' read -r h p u pwd <<< "$uline"
+            map_lines+=("$cur:$h:$p:$u:$pwd")
+            cur=$((cur+1))
+        done <<< "$upstreams"
+    else
+        echo -e "${YELLOW}输入端口与上游 SOCKS5 映射（每行: 本地端口:host:port:username:password），结束 Ctrl+D:${NC}"
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            [[ -z "$line" ]] && continue
+            map_lines+=("$line")
+        done
+    fi
 
-    inbounds_json=""
-    outbounds_json="    { \"type\": \"direct\", \"tag\": \"direct\" },\n"
-    idx=1
-
-    while IFS= read -r row; do
-        [[ -z "$row" ]] && continue
-        IFS=':' read -r lp h p u pwd <<< "$row"
-        tag="s5-$idx"
-        # inbound（每端口一个 mixed，统一认证可选，这里不开认证以节省摩擦；如需加认证，可添加 users 字段）
-        inbounds_json+="    { \"type\": \"mixed\", \"listen\": \"$bind_addr\", \"listen_port\": $lp, \"sniff\": true, \"sniff_override_destination\": true, \"tag\": \"in-$lp\" },\n"
-        # outbound 一个对应一个上游
-        outbounds_json+="    { \"type\": \"socks\", \"tag\": \"$tag\", \"server\": \"$h\", \"server_port\": $p, \"version\": \"5\", \"username\": \"$u\", \"password\": \"$pwd\" },\n"
-        # route 里为每个 inbound 绑定唯一 outbound
-        route_rules+="      { \"inbound\": [\"in-$lp\"], \"outbound\": \"$tag\" },\n"
-        idx=$((idx+1))
-    done <<< "$mapping"
-
-    # 去尾逗号\n
-    inbounds_json=${inbounds_json%,\n}
-    outbounds_json=${outbounds_json%,\n}
-    route_rules=${route_rules%,\n}
-
-    cat > "$SB_CONF_FILE" <<EOF
-{
-  "log": { "level": "warn" },
-  "inbounds": [
-$inbounds_json
-  ],
-  "outbounds": [
-$outbounds_json
-  ],
-  "route": {
-    "rules": [
-$route_rules
-    ],
-    "final": "direct"
-  }
-}
-EOF
+    # 写入 JSON（逐段构造，避免转义问题）
+    : > "$SB_CONF_FILE"
+    {
+        echo '{'
+        echo '  "log": { "level": "warn" },'
+        echo '  "inbounds": ['
+        first=1
+        for row in "${map_lines[@]}"; do
+            IFS=':' read -r lp h p u pwd <<< "$row"
+            [ -z "$lp" ] && continue
+            if [ $first -eq 0 ]; then echo ','; fi
+            printf '    { "type": "mixed", "listen": "%s", "listen_port": %s, "sniff": true, "sniff_override_destination": true, "tag": "in-%s" }' "$bind_addr" "$lp" "$lp"
+            first=0
+        done
+        echo
+        echo '  ],'
+        echo '  "outbounds": ['
+        # 先 direct
+        printf '    { "type": "direct", "tag": "direct" }'
+        for i in "${!map_lines[@]}"; do
+            row="${map_lines[$i]}"
+            IFS=':' read -r lp h p u pwd <<< "$row"
+            [ -z "$lp" ] && continue
+            tag="s5-$((i+1))"
+            printf ',\n    { "type": "socks", "tag": "%s", "server": "%s", "server_port": %s, "version": "5", "username": "%s", "password": "%s" }' "$tag" "$h" "$p" "$u" "$pwd"
+        done
+        echo
+        echo '  ],'
+        echo '  "route": {'
+        echo '    "rules": ['
+        first=1
+        for i in "${!map_lines[@]}"; do
+            row="${map_lines[$i]}"
+            IFS=':' read -r lp h p u pwd <<< "$row"
+            [ -z "$lp" ] && continue
+            tag="s5-$((i+1))"
+            if [ $first -eq 0 ]; then echo ','; fi
+            printf '      { "inbound": ["in-%s"], "outbound": "%s" }' "$lp" "$tag"
+            first=0
+        done
+        echo
+        echo '    ],'
+        echo '    "final": "direct"'
+        echo '  }'
+        echo '}'
+    } >> "$SB_CONF_FILE"
     echo -e "${GREEN}✓ 已生成多端口映射配置：$SB_CONF_FILE${NC}"
     systemctl daemon-reload
 }
