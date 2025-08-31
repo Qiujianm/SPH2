@@ -1,6 +1,6 @@
 #!/bin/bash
 
-VERSION="2025-02-19"
+VERSION="2025-09-01"
 AUTHOR="Qiujianm"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -42,7 +42,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 NC='\033[0m'
 
-VERSION="2025-02-19"
+VERSION="2025-09-01"
 AUTHOR="Qiujianm"
 
 # 直接调用主菜单
@@ -53,28 +53,24 @@ main_menu() {
         printf "%b作者: ${AUTHOR}%b\n" "${GREEN}" "${NC}"
         printf "%b版本: ${VERSION}%b\n" "${GREEN}" "${NC}"
         printf "%b====================================%b\n" "${GREEN}" "${NC}"
-        echo "1. 安装模式"
-        echo "2. 服务端管理"
-        echo "3. 客户端管理"
-        echo "4. 系统优化"
-        echo "5. 检查更新"
-        echo "6. 运行状态"
-        echo "7. 完全卸载"
+        echo "1. 服务端管理"
+        echo "2. 客户端管理"
+        echo "3. 系统管理"
+        echo "4. 运行状态"
+        echo "5. 系统管理"
         echo "0. 退出脚本"
         printf "%b====================================%b\n" "${GREEN}" "${NC}"
         
-        read -t 60 -p "请选择 [0-7]: " choice || {
+        read -t 60 -p "请选择 [0-5]: " choice || {
             printf "\n%b操作超时，退出脚本%b\n" "${YELLOW}" "${NC}"
             exit 1
         }
         
         case $choice in
-            1) bash ./config.sh install ;;
-            2) bash ./server.sh ;;
-            3) bash ./client.sh ;;
-            4) bash ./config.sh optimize ;;
-            5) bash ./config.sh update ;;
-            6)
+            1) bash ./server.sh ;;
+            2) bash ./client.sh ;;
+            3) bash ./main.sh ;;
+            4)
                 echo -e "${YELLOW}服务端状态:${NC}"
                 systemctl status hysteria-server@* --no-pager 2>/dev/null || echo "没有运行的服务端实例"
                 echo
@@ -82,7 +78,7 @@ main_menu() {
                 systemctl status hysteriaclient@* --no-pager 2>/dev/null || echo "没有运行的客户端实例"
                 read -t 30 -n 1 -s -r -p "按任意键继续..."
                 ;;
-            7) bash ./config.sh uninstall ;;
+            5) bash ./main.sh ;;
             0) exit 0 ;;
             *)
                 printf "%b无效选择%b\n" "${RED}" "${NC}"
@@ -1539,6 +1535,43 @@ EOF
 
 }
 
+# 清理所有旧客户端服务
+cleanup_old_client_services() {
+    echo -e "${YELLOW}正在清理所有旧的客户端服务...${NC}"
+    
+    # 查找所有客户端服务
+    client_services=$(systemctl list-unit-files | grep "hysteriaclient@" | awk '{print $1}')
+    
+    if [ -z "$client_services" ]; then
+        echo -e "${GREEN}没有找到旧的客户端服务${NC}"
+        return
+    fi
+    
+    echo -e "${YELLOW}找到以下客户端服务：${NC}"
+    echo "$client_services"
+    echo
+    
+    read -p "确认要停止并禁用这些服务吗？(y/n): " confirm
+    if [[ "$confirm" != [yY] ]]; then
+        echo -e "${YELLOW}操作已取消${NC}"
+        return
+    fi
+    
+    cleaned_count=0
+    for service in $client_services; do
+        echo -e "${YELLOW}正在清理: $service${NC}"
+        systemctl stop "$service" >/dev/null 2>&1 || true
+        systemctl disable "$service" >/dev/null 2>&1 || true
+        ((cleaned_count++))
+    done
+    
+    echo -e "${GREEN}✓ 清理完成，共清理 $cleaned_count 个客户端服务${NC}"
+    echo -e "${YELLOW}提示：这些服务已被停止和禁用，但服务文件仍然存在${NC}"
+    echo -e "${YELLOW}如需完全删除，请手动删除 /etc/systemd/system/hysteriaclient@*.service 文件${NC}"
+    
+    read -p "按回车键返回..."
+}
+
 main_menu() {
     check_env
     while true; do
@@ -1560,6 +1593,7 @@ main_menu() {
             5) manage_all_instances ;;
             6) status_all_instances; read -p "按回车返回..." ;;
             7) generate_instance_auto ;;
+            8) cleanup_old_client_services ;;
             0) exit 0 ;;
             *) echo "无效选择" ;;
         esac
@@ -2541,199 +2575,7 @@ done
 CLIENTEOF
     chmod +x /root/hysteria/client.sh
 
-    # 创建并赋权 config.sh
-cat > /root/hysteria/config.sh << 'CONFIGEOF'
-#!/bin/bash
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-NC='\033[0m'
 
-# 系统优化
-optimize() {
-    printf "%b正在优化系统配置...%b\n" "${YELLOW}" "${NC}"
-    
-    # 提供用户选择模式
-    printf "%b请选择拥塞控制模式:%b\n" "${YELLOW}" "${NC}"
-    echo "1. Brutal 拥塞控制"
-    echo "2. BBR 拥塞控制"
-    echo "3. 两者结合 (BBR+FQ)"
-    read -p "请输入选择 [1-3]: " congestion_control_choice
-
-    case "$congestion_control_choice" in
-        1)
-            congestion_control="brutal"
-            ;;
-        2)
-            congestion_control="bbr"
-            ;;
-        3)
-            congestion_control="bbr"
-            default_qdisc="fq"
-            ;;
-        *)
-            printf "%b无效选择，默认使用 Brutal 拥塞控制%b\n" "${RED}" "${NC}"
-            congestion_control="brutal"
-            ;;
-    esac
-    
-    # 确保 BBR 可用
-    if [[ "$congestion_control" == "bbr" ]]; then
-        if ! lsmod | grep -q bbr; then
-            printf "%bBBR 未启用，正在安装...%b\n" "${YELLOW}" "${NC}"
-            echo "tcp_bbr" | tee /etc/modules-load.d/bbr.conf
-            modprobe tcp_bbr
-            cat >> /etc/sysctl.d/99-bbr.conf << EOF
-net.core.default_qdisc=fq
-net.ipv4.tcp_congestion_control=bbr
-EOF
-            sysctl --system
-            printf "%bBBR 已成功启用！%b\n" "${GREEN}" "${NC}"
-        else
-            printf "%bBBR 已经启用，无需重复安装。%b\n" "${GREEN}" "${NC}"
-        fi
-    fi
-    
-    # 创建 sysctl 配置文件
-    cat > /etc/sysctl.d/99-hysteria.conf << EOF
-# 设置16MB缓冲区
-net.core.rmem_max=16777216
-net.core.wmem_max=16777216
-net.core.rmem_default=16777216
-net.core.wmem_default=16777216
-# TCP缓冲区设置
-net.ipv4.tcp_rmem=4096 87380 16777216
-net.ipv4.tcp_wmem=4096 87380 16777216
-# 启用 $congestion_control 拥塞控制
-net.ipv4.tcp_congestion_control=$congestion_control
-EOF
-
-    # 如果选择了 BBR+FQ，添加 default_qdisc 设置
-    if [ "$default_qdisc" == "fq" ]; then
-        echo "net.core.default_qdisc=fq" >> /etc/sysctl.d/99-hysteria.conf
-    fi
-    
-    # 其他网络优化
-    cat >> /etc/sysctl.d/99-hysteria.conf << EOF
-net.ipv4.tcp_fastopen=3
-net.ipv4.tcp_slow_start_after_idle=0
-# Hysteria QUIC优化
-net.ipv4.ip_forward=1
-net.ipv4.tcp_mtu_probing=1
-EOF
-    
-    # 立即应用 sysctl 设置
-    sysctl -p /etc/sysctl.d/99-hysteria.conf
-    
-    # 设置系统文件描述符限制
-    cat > /etc/security/limits.d/99-hysteria.conf << EOF
-* soft nofile 1000000
-* hard nofile 1000000
-root soft nofile 1000000
-root hard nofile 1000000
-EOF
-
-    # 创建优先级配置文件
-    mkdir -p /etc/systemd/system/hysteria-server.service.d
-    cat > /etc/systemd/system/hysteria-server.service.d/priority.conf << EOF
-[Service]
-CPUSchedulingPolicy=rr
-CPUSchedulingPriority=99
-EOF
-
-    # 重载 systemd 配置文件并重启服务
-    systemctl daemon-reload
-    systemctl restart hysteria-server.service
-
-    # 立即设置当前会话的缓冲区
-    sysctl -w net.core.rmem_max=16777216
-    sysctl -w net.core.wmem_max=16777216
-
-    printf "%b系统优化完成，已设置：%b\n" "${GREEN}" "${NC}"
-    echo "1. 发送/接收缓冲区: 16MB"
-    echo "2. 文件描述符限制: 1000000"
-    echo "3. 拥塞控制: $congestion_control"
-    [ "$default_qdisc" == "fq" ] && echo "4. 默认队列规则: fq"
-    echo "5. TCP Fast Open"
-    echo "6. QUIC优化"
-    echo "7. CPU 调度优先级"
-    sleep 2
-}
-
-# 版本更新
-update() {
-    printf "%b正在检查更新...%b\n" "${YELLOW}" "${NC}"
-    
-    # 备份当前配置
-    cp /etc/hysteria/config.yaml /etc/hysteria/config.yaml.bak 2>/dev/null
-    
-    # 根据地理位置选择下载源
-    if curl -s http://ipinfo.io | grep -q '"country": "CN"'; then
-        local url="https://hub.gitmirror.com/https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64"
-    else
-        local url="https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64"
-    fi
-    
-    printf "%b尝试从 %s 下载...%b\n" "${YELLOW}" "$url" "${NC}"
-    if wget -O /usr/local/bin/hysteria.new "$url" && 
-       chmod +x /usr/local/bin/hysteria.new &&
-       /usr/local/bin/hysteria.new version >/dev/null 2>&1; then
-        mv /usr/local/bin/hysteria.new /usr/local/bin/hysteria
-        printf "%b更新成功%b\n" "${GREEN}" "${NC}"
-    else
-        printf "%b更新失败%b\n" "${RED}" "${NC}"
-        [ -f /etc/hysteria/config.yaml.bak ] && mv /etc/hysteria/config.yaml.bak /etc/hysteria/config.yaml
-        return 1
-    fi
-    
-    systemctl restart hysteria-server
-    sleep 2
-}
-
-# 完全卸载
-uninstall() {
-    printf "%b═══════ 卸载确认 ═══════%b\n" "${YELLOW}" "${NC}"
-    read -p "确定要卸载Hysteria吗？(y/n): " confirm
-    if [[ $confirm == [yY] ]]; then
-        printf "%b正在卸载...%b\n" "${YELLOW}" "${NC}"
-        
-        systemctl stop hysteria-server
-        systemctl disable hysteria-server
-        
-        rm -rf /etc/hysteria
-        rm -rf /root/H2
-        rm -f /usr/local/bin/hysteria
-        rm -f /usr/local/bin/h2
-        rm -f /etc/systemd/system/hysteria-server.service
-        rm -f /etc/sysctl.d/99-hysteria.conf
-        rm -f /etc/security/limits.d/99-hysteria.conf
-        rm -f /root/{main,server,client,config}.sh
-        
-        systemctl daemon-reload
-        
-        printf "%b卸载完成%b\n" "${GREEN}" "${NC}"
-        exit 0
-    fi
-}
-
-# 根据参数执行对应功能
-case "$1" in
-    "optimize")
-        optimize
-        ;;
-    "update")
-        update
-        ;;
-    "uninstall")
-        uninstall
-        ;;
-    *)
-        echo "用法: $0 {optimize|update|uninstall}"
-        exit 1
-        ;;
-esac
-CONFIGEOF
-    chmod +x /root/hysteria/config.sh
 
     # 创建启动器命令
     cat > /usr/local/bin/h2 << 'CMDEOF'
@@ -2751,16 +2593,30 @@ chmod +x /usr/local/bin/h2
 cleanup_old_installation() {
     printf "%b清理旧的安装...%b\n" "${YELLOW}" "${NC}"
     
-    # 停止所有hysteria服务
+    # 停止所有hysteria服务端服务
+    printf "%b停止服务端服务...%b\n" "${YELLOW}" "${NC}"
     systemctl stop hysteria-server 2>/dev/null
     systemctl stop hysteria-server@* 2>/dev/null
+    systemctl stop hysteria-server-manager 2>/dev/null
     systemctl disable hysteria-server 2>/dev/null
     systemctl disable hysteria-server@* 2>/dev/null
+    systemctl disable hysteria-server-manager 2>/dev/null
+    
+    # 停止所有hysteria客户端服务
+    printf "%b停止客户端服务...%b\n" "${YELLOW}" "${NC}"
+    systemctl stop hysteriaclient@* 2>/dev/null
+    systemctl stop hysteria-client-manager 2>/dev/null
+    systemctl disable hysteriaclient@* 2>/dev/null
+    systemctl disable hysteria-client-manager 2>/dev/null
     
     # 杀死所有hysteria进程
+    printf "%b终止hysteria进程...%b\n" "${YELLOW}" "${NC}"
     pkill -f hysteria 2>/dev/null
+    pkill -f "hysteria server" 2>/dev/null
+    pkill -f "hysteria client" 2>/dev/null
     
     # 清理文件和目录
+    printf "%b清理文件和目录...%b\n" "${YELLOW}" "${NC}"
     rm -rf /etc/hysteria
     rm -rf /root/H2
     rm -rf /root/hysteria
@@ -2768,17 +2624,24 @@ cleanup_old_installation() {
     rm -f /usr/local/bin/h2
     rm -f /etc/systemd/system/hysteria-server.service
     rm -f /etc/systemd/system/hysteria-server@*.service
+    rm -f /etc/systemd/system/hysteria-server-manager.service
+    rm -f /etc/systemd/system/hysteriaclient@*.service
+    rm -f /etc/systemd/system/hysteria-client-manager.service
     rm -f /etc/sysctl.d/99-hysteria.conf
     rm -f /etc/security/limits.d/99-hysteria.conf
     rm -f /root/{main,server,client,config}.sh
     
-    # 清理客户端配置文件
+    # 清理配置文件
+    printf "%b清理配置文件...%b\n" "${YELLOW}" "${NC}"
     rm -f /root/*.json
+    rm -f /root/config_*.yaml
+    rm -f /var/run/hysteria-server-manager.pid
     
     # 重新加载systemd
+    printf "%b重新加载systemd...%b\n" "${YELLOW}" "${NC}"
     systemctl daemon-reload
     
-    printf "%b清理完成%b\n" "${GREEN}" "${NC}"
+    printf "%b✓ 清理完成%b\n" "${GREEN}" "${NC}"
 }
 
 # 安装基础依赖
