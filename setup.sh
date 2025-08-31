@@ -1529,19 +1529,8 @@ main_menu() {
     done
 }
 
+# 启动主菜单
 main_menu
-case "$1" in
-    "install")
-        generate_server_config
-        ;;
-    "manage")
-        server_menu
-        ;;
-    *)
-        echo "用法: $0 {install|manage}"
-        exit 1
-        ;;
-esac
 SERVEREOF
     chmod +x /root/hysteria/server.sh
 
