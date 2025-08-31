@@ -2715,6 +2715,13 @@ EOF
 generate_config_port_map() {
     ensure_dirs
     read -p "监听地址 [0.0.0.0]: " bind_addr; bind_addr=${bind_addr:-0.0.0.0}
+    read -p "是否启用统一入站认证？(y/N): " use_auth
+    users_fragment=""
+    if [[ "$use_auth" == "y" || "$use_auth" == "Y" ]]; then
+        read -p "入站认证用户名: " in_user
+        read -p "入站认证密码: " in_pass
+        users_fragment=", \"users\": [ { \"username\": \"$in_user\", \"password\": \"$in_pass\" } ]"
+    fi
     echo -e "${YELLOW}是否使用起始端口自动分配？(y/N)${NC}"
     read -p "选择: " auto_map
     map_lines=()
@@ -2753,7 +2760,7 @@ generate_config_port_map() {
             IFS=':' read -r lp h p u pwd <<< "$row"
             [ -z "$lp" ] && continue
             if [ $first -eq 0 ]; then echo ','; fi
-            printf '    { "type": "mixed", "listen": "%s", "listen_port": %s, "sniff": true, "sniff_override_destination": true, "tag": "in-%s" }' "$bind_addr" "$lp" "$lp"
+            printf '    { "type": "mixed", "listen": "%s", "listen_port": %s, "sniff": true, "sniff_override_destination": true, "tag": "in-%s"%s }' "$bind_addr" "$lp" "$lp" "$users_fragment"
             first=0
         done
         echo
