@@ -1253,7 +1253,7 @@ acl:
     if [[ "$deploy_mode" == "1" ]]; then
         # 双端同机模式：服务端直接提供HTTP/SOCKS5代理
         cat >"$config_file" <<EOF
-listen: $server_listen
+listen: :$server_port
 
 tls:
   cert: $crt
@@ -1288,7 +1288,6 @@ socks5:
   listen: 0.0.0.0:$server_port
   username: $proxy_username
   password: $proxy_password
-$proxy_config
 EOF
     else
         # 双端不同机模式：服务端只提供Hysteria协议
