@@ -110,6 +110,7 @@ NC='\033[0m'
 HYSTERIA_BIN="/usr/local/bin/hysteria"
 SYSTEMD_DIR="/etc/systemd/system"
 CONFIG_DIR="/etc/hysteria"
+DEFAULT_BATCH_SIZE=10
 
 check_env() {
     echo -e "${YELLOW}检查环境依赖...${NC}"
@@ -143,6 +144,19 @@ check_env() {
     mkdir -p "$CONFIG_DIR"
     echo -e "${GREEN}✓ 配置目录已创建${NC}"
     
+    # 确保统一的 slice 存在（用于资源记账/后续限额）
+    local slice_file="${SYSTEMD_DIR}/hysteria-server.slice"
+    if [ ! -f "$slice_file" ]; then
+        cat > "$slice_file" <<EOF
+[Slice]
+CPUAccounting=yes
+MemoryAccounting=yes
+TasksAccounting=yes
+EOF
+        systemctl daemon-reload
+        echo -e "${GREEN}✓ 已创建 hysteria-server.slice${NC}"
+    fi
+    
     echo -e "${GREEN}环境检查完成${NC}"
 }
 
@@ -172,8 +186,11 @@ After=network.target
 Type=simple
 ExecStart=$HYSTERIA_BIN server -c $config_file
 Restart=always
-RestartSec=3
+RestartSec=1
 User=root
+Slice=hysteria-server.slice
+LimitNOFILE=1000000
+TasksMax=infinity
 
 [Install]
 WantedBy=multi-user.target
@@ -203,8 +220,11 @@ After=network.target
 Type=simple
 ExecStart=$HYSTERIA_BIN server -c $config_file
 Restart=always
-RestartSec=3
+RestartSec=1
 User=root
+Slice=hysteria-server.slice
+LimitNOFILE=1000000
+TasksMax=infinity
 
 [Install]
 WantedBy=multi-user.target
@@ -511,40 +531,12 @@ EOF
     
     # 询问启动方式
     echo -e "${YELLOW}选择启动方式：${NC}"
-    echo "1. 使用统一服务管理（推荐，一个服务管理所有配置）"
-    echo "2. 使用多实例服务（每个配置一个服务）"
-    echo "3. 直接启动进程（速度快，但重启后需要手动启动）"
-    read -p "请选择 [1-3]: " create_service
+    echo "1. 使用多实例服务（推荐，每个配置一个服务）"
+    echo "2. 直接启动进程（速度快，但重启后需要手动启动）"
+    read -p "请选择 [1-2]: " create_service
     
     case "$create_service" in
         1)
-            # 统一服务模式
-            echo -e "${YELLOW}正在创建统一服务管理所有配置...${NC}"
-            if create_server_unified_service; then
-                echo -e "${GREEN}✓ 统一服务创建成功${NC}"
-                
-                # 重新加载systemd配置
-                echo -e "${YELLOW}正在重新加载systemd配置...${NC}"
-                systemctl daemon-reload
-                
-                # 启动统一服务
-                echo -e "${YELLOW}正在启动统一服务...${NC}"
-                if systemctl start "hysteria-server-manager.service"; then
-                    echo -e "${GREEN}✓ 统一服务启动成功，正在管理所有配置文件${NC}"
-                    # 显示正在管理的配置文件
-                    for i in "${!ports_to_create[@]}"; do
-                        local port="${ports_to_create[$i]}"
-                        echo -e "${GREEN}  - 管理配置：端口 $port${NC}"
-                    done
-                else
-                    echo -e "${RED}✗ 统一服务启动失败${NC}"
-                    systemctl status "hysteria-server-manager.service" --no-pager
-                fi
-            else
-                echo -e "${RED}✗ 统一服务创建失败${NC}"
-            fi
-            ;;
-        2)
             # 多实例服务模式
             echo -e "${YELLOW}正在批量创建systemd服务...${NC}"
             for i in "${!ports_to_create[@]}"; do
@@ -563,8 +555,10 @@ EOF
             echo -e "${YELLOW}正在批量启动所有服务...${NC}"
             echo -e "${YELLOW}提示：为避免系统负载过高，将分批启动服务${NC}"
             
-            # 分批启动，每批5个服务
-            batch_size=5
+            # 分批启动，可通过环境变量 HY2_BATCH_SIZE 调整（默认10）
+            batch_size=${HY2_BATCH_SIZE:-$DEFAULT_BATCH_SIZE}
+            # 分批启动，可通过环境变量 HY2_BATCH_SIZE 调整（默认10）
+            batch_size=${HY2_BATCH_SIZE:-$DEFAULT_BATCH_SIZE}
             total_services=${#ports_to_create[@]}
             started_count=0
             
@@ -588,7 +582,7 @@ EOF
             
             echo -e "${GREEN}✓ 批量启动完成，共启动 $started_count/$total_services 个服务${NC}"
             ;;
-        3)
+        2)
             # 直接进程模式
             echo -e "${YELLOW}正在直接启动hysteria进程...${NC}"
             for i in "${!ports_to_create[@]}"; do
@@ -1399,53 +1393,17 @@ EOF
 
     # 询问启动方式
     echo -e "${YELLOW}选择启动方式：${NC}"
-    echo "1. 使用统一服务管理（推荐，一个服务管理所有配置）"
-    echo "2. 使用多实例服务（每个配置一个服务）"
-    echo "3. 直接启动进程（速度快，但重启后需要手动启动）"
-    read -p "请选择 [1-3]: " create_service
+    echo "1. 使用多实例服务（推荐，每个配置一个服务）"
+    echo "2. 直接启动进程（速度快，但重启后需要手动启动）"
+    read -p "请选择 [1-2]: " create_service
     
     case "$create_service" in
         1)
-            # 统一服务模式
-            echo -e "${YELLOW}正在创建统一服务管理所有配置...${NC}"
-            if create_server_unified_service; then
-                echo -e "${GREEN}✓ 统一服务创建成功${NC}"
-                
-                # 重新加载systemd配置
-                echo -e "${YELLOW}正在重新加载systemd配置...${NC}"
-                systemctl daemon-reload
-                
-                # 启动统一服务
-                echo -e "${YELLOW}正在启动统一服务...${NC}"
-                if systemctl start "hysteria-server-manager.service"; then
-                    echo -e "${GREEN}✓ 统一服务启动成功，正在管理所有配置文件${NC}"
-                    
-                    # 等待服务完全启动
-                    echo -e "${YELLOW}等待服务完全启动...${NC}"
-                    sleep 5
-                    
-                    # 检查服务状态
-                    if systemctl is-active --quiet "hysteria-server-manager.service"; then
-                        echo -e "${GREEN}✓ 统一服务运行正常${NC}"
-                        echo -e "${GREEN}  - 管理配置：端口 $server_port${NC}"
-                    else
-                        echo -e "${RED}✗ 统一服务启动异常${NC}"
-                        systemctl status "hysteria-server-manager.service" --no-pager
-                    fi
-                else
-                    echo -e "${RED}✗ 统一服务启动失败${NC}"
-                    systemctl status "hysteria-server-manager.service" --no-pager
-                fi
-            else
-                echo -e "${RED}✗ 统一服务创建失败${NC}"
-            fi
-            ;;
-        2)
             # 多实例服务模式
             create_systemd_unit "$server_port" "$config_file"
             systemctl restart "hysteria-server@${server_port}.service"
             ;;
-        3)
+        2)
             # 直接进程模式
             echo -e "${YELLOW}正在直接启动hysteria进程...${NC}"
             
