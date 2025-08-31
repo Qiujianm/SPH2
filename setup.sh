@@ -2687,15 +2687,6 @@ esac
 CONFIGEOF
     chmod +x /root/hysteria/config.sh
 
-    # 创建启动器命令
-    cat > /usr/local/bin/h2 << 'CMDEOF'
-#!/bin/bash
-cd /root/hysteria
-[ "$EUID" -ne 0 ] && printf "\033[0;31m请使用root权限运行此脚本\033[0m\n" && exit 1
-bash ./main.sh
-CMDEOF
-chmod +x /usr/local/bin/h2
-
     printf "%b所有模块脚本创建完成%b\n" "${GREEN}" "${NC}"
 }
 
@@ -2973,43 +2964,7 @@ EOF
     printf "%bSystemd服务创建完成%b\n" "${GREEN}" "${NC}"
 }
 
-# 验证安装
-verify_installation() {
-    printf "%b验证安装...%b\n" "${YELLOW}" "${NC}"
-    
-    # 检查hysteria可执行文件
-    if [ ! -f "/usr/local/bin/hysteria" ] || [ ! -x "/usr/local/bin/hysteria" ]; then
-        printf "%b✗ hysteria可执行文件不存在或无法执行%b\n" "${RED}" "${NC}"
-        return 1
-    fi
-    
-    # 检查文件大小
-    if [ ! -s "/usr/local/bin/hysteria" ]; then
-        printf "%b✗ hysteria文件为空%b\n" "${RED}" "${NC}"
-        return 1
-    fi
-    
-    # 测试版本命令
-    if ! /usr/local/bin/hysteria version >/dev/null 2>&1; then
-        printf "%b✗ hysteria版本检查失败%b\n" "${RED}" "${NC}"
-        return 1
-    fi
-    
-    # 检查脚本文件
-    if [ ! -f "/root/hysteria/main.sh" ] || [ ! -x "/root/hysteria/main.sh" ]; then
-        printf "%b✗ 管理脚本不存在或无法执行%b\n" "${RED}" "${NC}"
-        return 1
-    fi
-    
-    # 检查systemd服务
-    if [ ! -f "/etc/systemd/system/hysteria-server.service" ]; then
-        printf "%b✗ systemd服务文件不存在%b\n" "${RED}" "${NC}"
-        return 1
-    fi
-    
-    printf "%b✓ 安装验证通过%b\n" "${GREEN}" "${NC}"
-    return 0
-}
+
 
 # 主函数
 main() {
