@@ -53,13 +53,12 @@ main_menu() {
         printf "%b作者: ${AUTHOR}%b\n" "${GREEN}" "${NC}"
         printf "%b版本: ${VERSION}%b\n" "${GREEN}" "${NC}"
         printf "%b====================================%b\n" "${GREEN}" "${NC}"
-        echo "1. 安装模式"
-        echo "2. 服务端管理"
-        echo "3. 客户端管理"
-        echo "4. 系统优化"
-        echo "5. 检查更新"
-        echo "6. 运行状态"
-        echo "7. 完全卸载"
+        echo "1. 服务端管理"
+        echo "2. 客户端管理"
+        echo "3. 系统优化"
+        echo "4. 检查更新"
+        echo "5. 运行状态"
+        echo "6. 完全卸载"
         echo "0. 退出脚本"
         printf "%b====================================%b\n" "${GREEN}" "${NC}"
         
@@ -69,12 +68,11 @@ main_menu() {
         }
         
         case $choice in
-            1) bash ./config.sh install ;;
-            2) bash ./server.sh ;;
-            3) bash ./client.sh ;;
-            4) bash ./config.sh optimize ;;
-            5) bash ./config.sh update ;;
-            6)
+            1) bash ./server.sh ;;
+            2) bash ./client.sh ;;
+            3) bash ./config.sh optimize ;;
+            4) bash ./config.sh update ;;
+            5)
                 echo -e "${YELLOW}服务端状态:${NC}"
                 systemctl status hysteria-server@* --no-pager 2>/dev/null || echo "没有运行的服务端实例"
                 echo
@@ -82,7 +80,7 @@ main_menu() {
                 systemctl status hysteriaclient@* --no-pager 2>/dev/null || echo "没有运行的客户端实例"
                 read -t 30 -n 1 -s -r -p "按任意键继续..."
                 ;;
-            7) bash ./config.sh uninstall ;;
+            6) bash ./config.sh uninstall ;;
             0) exit 0 ;;
             *)
                 printf "%b无效选择%b\n" "${RED}" "${NC}"
@@ -343,7 +341,7 @@ EOF
 
 is_port_in_use() {
     local port=$1
-    ss -lnt | awk '{print $4}' | grep -q ":$port\$"
+    ss -lntu | awk '{print $4}' | grep -q ":$port\$"
 }
 
 generate_instances_batch() {
@@ -359,6 +357,12 @@ generate_instances_batch() {
         [[ -z "$line" ]] && continue
         proxies+="$line"$'\n'
     done
+
+    # 先获取服务器地址
+    local domain=$(curl -s ipinfo.io/ip || curl -s myip.ipip.net | grep -oE "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" || curl -s https://api.ip.sb/ip)
+    if [ -z "$domain" ]; then
+        read -p "请输入服务器公网IP: " domain
+    fi
 
     # 选择双端部署模式
     echo -e "${YELLOW}双端部署模式选择:${NC}"
@@ -397,10 +401,6 @@ generate_instances_batch() {
     read -p "请输入批量新建实例的起始端口: " start_port
     current_port="$start_port"
 
-    local domain=$(curl -s ipinfo.io/ip || curl -s myip.ipip.net | grep -oE "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" || curl -s https://api.ip.sb/ip)
-    if [ -z "$domain" ]; then
-        read -p "请输入服务器公网IP: " domain
-    fi
     local crt_and_key; crt_and_key=$(gen_cert "$domain")
     local crt=$(echo "$crt_and_key" | cut -d'|' -f1)
     local key=$(echo "$crt_and_key" | cut -d'|' -f2)
@@ -1587,8 +1587,9 @@ main_menu() {
         echo "5. 启动/停止/重启所有实例"
         echo "6. 查看所有实例状态"
         echo "7. 全自动生成单实例配置"
+        echo "8. 清理所有旧客户端服务"
         echo "0. 退出"
-        read -p "请选择[0-7]: " opt
+        read -p "请选择[0-8]: " opt
         case "$opt" in
             1) generate_instances_batch ;;
             2) list_instances_and_delete; read -p "按回车返回..." ;;
@@ -1605,18 +1606,6 @@ main_menu() {
 }
 
 main_menu
-case "$1" in
-    "install")
-        generate_server_config
-        ;;
-    "manage")
-        server_menu
-        ;;
-    *)
-        echo "用法: $0 {install|manage}"
-        exit 1
-        ;;
-esac
 SERVEREOF
     chmod +x /root/hysteria/server.sh
 
@@ -2642,13 +2631,15 @@ net.core.wmem_default=16777216
 # TCP缓冲区设置
 net.ipv4.tcp_rmem=4096 87380 16777216
 net.ipv4.tcp_wmem=4096 87380 16777216
-# 启用 $congestion_control 拥塞控制
-net.ipv4.tcp_congestion_control=$congestion_control
 EOF
 
     # 如果选择了 BBR+FQ，添加 default_qdisc 设置
     if [ "$default_qdisc" == "fq" ]; then
         echo "net.core.default_qdisc=fq" >> /etc/sysctl.d/99-hysteria.conf
+    fi
+    # 仅在选择 BBR 时设置内核 TCP 拥塞控制
+    if [ "$congestion_control" = "bbr" ]; then
+        echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.d/99-hysteria.conf
     fi
     
     # 其他网络优化
@@ -2713,7 +2704,7 @@ update() {
     fi
     
     printf "%b尝试从 %s 下载...%b\n" "${YELLOW}" "$url" "${NC}"
-    if wget -O /usr/local/bin/hysteria.new "$url" && 
+    if wget --no-check-certificate --timeout=30 --tries=3 -O /usr/local/bin/hysteria.new "$url" && 
        chmod +x /usr/local/bin/hysteria.new &&
        /usr/local/bin/hysteria.new version >/dev/null 2>&1; then
         mv /usr/local/bin/hysteria.new /usr/local/bin/hysteria
@@ -2833,6 +2824,12 @@ cleanup_old_installation() {
     rm -f /root/config_*.yaml
     rm -f /var/run/hysteria-server-manager.pid
     
+    # 清理h2命令
+    rm -f /usr/local/bin/h2
+    if [ -f "/root/.bashrc" ]; then
+        sed -i '/alias h2=/d' /root/.bashrc 2>/dev/null || true
+    fi
+    
     # 重新加载systemd
     printf "%b重新加载systemd...%b\n" "${YELLOW}" "${NC}"
     systemctl daemon-reload
@@ -2845,9 +2842,9 @@ install_base() {
     printf "%b安装基础依赖...%b\n" "${YELLOW}" "${NC}"
     if [ -f /etc/debian_version ]; then
         apt update
-        apt install -y curl wget openssl net-tools
+        apt install -y curl wget openssl net-tools iproute2
     elif [ -f /etc/redhat-release ]; then
-        yum install -y curl wget openssl net-tools
+        yum install -y curl wget openssl net-tools iproute
     else
         printf "%b不支持的系统%b\n" "${RED}" "${NC}"
         exit 1
@@ -2922,59 +2919,6 @@ install_hysteria() {
     return 1
 }
 
-# 验证安装
-verify_installation() {
-    printf "%b验证安装...%b\n" "${YELLOW}" "${NC}"
-    
-    # 检查 hysteria 二进制文件
-    if [ ! -f "/usr/local/bin/hysteria" ]; then
-        printf "%b✗ Hysteria 二进制文件不存在%b\n" "${RED}" "${NC}"
-        return 1
-    fi
-    
-    if [ ! -x "/usr/local/bin/hysteria" ]; then
-        printf "%b✗ Hysteria 二进制文件没有执行权限%b\n" "${RED}" "${NC}"
-        return 1
-    fi
-    
-    # 检查文件大小
-    local size=$(stat -c%s /usr/local/bin/hysteria 2>/dev/null || echo "0")
-    if [ "$size" -lt 1000000 ]; then  # 小于1MB可能是损坏的
-        printf "%b✗ Hysteria 二进制文件可能损坏 (大小: %s bytes)%b\n" "${RED}" "$size" "${NC}"
-        return 1
-    fi
-    
-    # 检查版本命令
-    if ! /usr/local/bin/hysteria version >/dev/null 2>&1; then
-        printf "%b✗ Hysteria 版本命令执行失败%b\n" "${RED}" "${NC}"
-        return 1
-    fi
-    
-    # 检查管理脚本
-    if [ ! -f "/root/hysteria/main.sh" ]; then
-        printf "%b✗ 主管理脚本不存在%b\n" "${RED}" "${NC}"
-        return 1
-    fi
-    
-    if [ ! -f "/root/hysteria/server.sh" ]; then
-        printf "%b✗ 服务端管理脚本不存在%b\n" "${RED}" "${NC}"
-        return 1
-    fi
-    
-    if [ ! -f "/root/hysteria/client.sh" ]; then
-        printf "%b✗ 客户端管理脚本不存在%b\n" "${RED}" "${NC}"
-        return 1
-    fi
-    
-    # 检查默认服务文件
-    if [ ! -f "/etc/systemd/system/hysteria-server.service" ]; then
-        printf "%b✗ 默认服务文件不存在%b\n" "${RED}" "${NC}"
-        return 1
-    fi
-    
-    printf "%b✓ 安装验证通过%b\n" "${GREEN}" "${NC}"
-    return 0
-}
 
 # 创建systemd服务
 create_systemd_service() {
@@ -3034,6 +2978,15 @@ EOF
 
     systemctl daemon-reload
     systemctl enable hysteria-server
+    
+    # 创建h2命令别名
+    if [ -f "/root/.bashrc" ]; then
+        if ! grep -q "alias h2=" /root/.bashrc; then
+            echo "alias h2='bash /root/hysteria/main.sh'" >> /root/.bashrc
+            printf "%b已添加h2命令别名到.bashrc%b\n" "${GREEN}" "${NC}"
+        fi
+    fi
+    
     printf "%bSystemd服务创建完成%b\n" "${GREEN}" "${NC}"
 }
 
