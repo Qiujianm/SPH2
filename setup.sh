@@ -240,31 +240,60 @@ mkdir -p "$(dirname "$PID_FILE")"
 
 # 停止已存在的进程
 if [ -f "$PID_FILE" ]; then
-    pkill -F "$PID_FILE" 2>/dev/null || true
+    echo "停止已存在的进程..."
+    pids=$(cat "$PID_FILE" 2>/dev/null || echo "")
+    if [ -n "$pids" ]; then
+        for pid in $pids; do
+            if kill -0 "$pid" 2>/dev/null; then
+                kill "$pid" 2>/dev/null || true
+            fi
+        done
+    fi
     rm -f "$PID_FILE"
 fi
 
-# 启动所有配置文件（优化性能）
-pids=()
-config_count=0
-
+# 收集所有配置文件
+configs=()
 for cfg in "$CONFIG_DIR"/config_*.yaml; do
     if [ -f "$cfg" ]; then
-        config_count=$((config_count + 1))
-        
-        echo "Starting server with config: $cfg (${config_count})"
-        "$HYSTERIA_BIN" server -c "$cfg" &
-        pids+=($!)
-        
-        # 减少延迟，提高启动速度
+        configs+=("$cfg")
+    fi
+done
+
+if [ ${#configs[@]} -eq 0 ]; then
+    echo "没有找到配置文件"
+    exit 1
+fi
+
+echo "找到 ${#configs[@]} 个配置文件，开始分批启动..."
+
+# 分批启动，每批5个服务
+batch_size=5
+total_configs=${#configs[@]}
+started_pids=()
+
+for i in "${!configs[@]}"; do
+    cfg="${configs[$i]}"
+    config_count=$((i + 1))
+    
+    echo "Starting server with config: $cfg (${config_count}/${total_configs})"
+    "$HYSTERIA_BIN" server -c "$cfg" &
+    pid=$!
+    started_pids+=("$pid")
+    
+    # 每启动一批后暂停一下，避免系统负载过高
+    if (( (i + 1) % batch_size == 0 )) && (( i + 1 < total_configs )); then
+        echo "已启动 $((i + 1))/$total_configs 个服务，暂停 2 秒..."
+        sleep 2
+    else
         sleep 0.1
     fi
 done
 
-echo "总共启动了 $config_count 个服务端配置"
+echo "总共启动了 ${#started_pids[@]} 个服务端配置"
 
 # 保存PID到文件
-echo "${pids[@]}" > "$PID_FILE"
+echo "${started_pids[@]}" > "$PID_FILE"
 
 # 等待所有进程
 wait
@@ -285,9 +314,16 @@ Restart=always
 RestartSec=3
 User=root
 PIDFile=/var/run/hysteria-server-manager.pid
-Nice=-10
+# 资源限制优化
+MemoryMax=2G
+CPUQuota=50%
+Nice=5
 IOSchedulingClass=1
 IOSchedulingPriority=4
+# 进程管理
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target
@@ -523,16 +559,34 @@ EOF
             echo -e "${YELLOW}正在重新加载systemd配置...${NC}"
             systemctl daemon-reload
             
-            # 批量启动所有服务
+            # 批量启动所有服务（优化启动策略）
             echo -e "${YELLOW}正在批量启动所有服务...${NC}"
-            for port in "${ports_to_create[@]}"; do
+            echo -e "${YELLOW}提示：为避免系统负载过高，将分批启动服务${NC}"
+            
+            # 分批启动，每批5个服务
+            batch_size=5
+            total_services=${#ports_to_create[@]}
+            started_count=0
+            
+            for i in "${!ports_to_create[@]}"; do
+                local port="${ports_to_create[$i]}"
+                
                 if systemctl start "hysteria-server@${port}.service"; then
                     echo -e "${GREEN}✓ 服务 hysteria-server@${port}.service 启动成功${NC}"
+                    ((started_count++))
                 else
                     echo -e "${RED}✗ 服务 hysteria-server@${port}.service 启动失败${NC}"
                     systemctl status "hysteria-server@${port}.service" --no-pager
                 fi
+                
+                # 每启动一批后暂停一下，避免系统负载过高
+                if (( (i + 1) % batch_size == 0 )) && (( i + 1 < total_services )); then
+                    echo -e "${YELLOW}已启动 $((i + 1))/$total_services 个服务，暂停 2 秒...${NC}"
+                    sleep 2
+                fi
             done
+            
+            echo -e "${GREEN}✓ 批量启动完成，共启动 $started_count/$total_services 个服务${NC}"
             ;;
         3)
             # 直接进程模式
@@ -1365,7 +1419,19 @@ EOF
                 echo -e "${YELLOW}正在启动统一服务...${NC}"
                 if systemctl start "hysteria-server-manager.service"; then
                     echo -e "${GREEN}✓ 统一服务启动成功，正在管理所有配置文件${NC}"
-                    echo -e "${GREEN}  - 管理配置：端口 $server_port${NC}"
+                    
+                    # 等待服务完全启动
+                    echo -e "${YELLOW}等待服务完全启动...${NC}"
+                    sleep 5
+                    
+                    # 检查服务状态
+                    if systemctl is-active --quiet "hysteria-server-manager.service"; then
+                        echo -e "${GREEN}✓ 统一服务运行正常${NC}"
+                        echo -e "${GREEN}  - 管理配置：端口 $server_port${NC}"
+                    else
+                        echo -e "${RED}✗ 统一服务启动异常${NC}"
+                        systemctl status "hysteria-server-manager.service" --no-pager
+                    fi
                 else
                     echo -e "${RED}✗ 统一服务启动失败${NC}"
                     systemctl status "hysteria-server-manager.service" --no-pager
