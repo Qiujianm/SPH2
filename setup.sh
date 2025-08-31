@@ -69,11 +69,11 @@ main_menu() {
         }
         
         case $choice in
-            1) bash ./server.sh ;;
-            2) bash ./client.sh ;;
-            3) bash ./relay.sh ;;
-            4) bash ./config.sh optimize ;;
-            5) bash ./config.sh update ;;
+            1) bash /root/hysteria/server.sh ;;
+            2) bash /root/hysteria/client.sh ;;
+            3) bash /root/hysteria/relay.sh ;;
+            4) bash /root/hysteria/config.sh optimize ;;
+            5) bash /root/hysteria/config.sh update ;;
             6)
                 echo -e "${YELLOW}服务端状态:${NC}"
                 systemctl status hysteria-server@* --no-pager 2>/dev/null || echo "没有运行的服务端实例"
