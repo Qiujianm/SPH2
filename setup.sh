@@ -62,16 +62,16 @@ main_menu() {
         echo "0. 退出脚本"
         printf "%b====================================%b\n" "${GREEN}" "${NC}"
         
-        read -t 60 -p "请选择 [0-6]: " choice || {
+        read -t 60 -p "请选择 [0-7]: " choice || {
             printf "\n%b操作超时，退出脚本%b\n" "${YELLOW}" "${NC}"
             exit 1
         }
         
         case $choice in
-            1) bash /root/hysteria/server.sh ;;
-            2) bash /root/hysteria/client.sh ;;
-            3) bash /root/hysteria/config.sh optimize ;;
-            4) bash /root/hysteria/config.sh update ;;
+            1) bash ./server.sh ;;
+            2) bash ./client.sh ;;
+            3) bash ./config.sh optimize ;;
+            4) bash ./config.sh update ;;
             5)
                 echo -e "${YELLOW}服务端状态:${NC}"
                 systemctl status hysteria-server@* --no-pager 2>/dev/null || echo "没有运行的服务端实例"
@@ -80,7 +80,7 @@ main_menu() {
                 systemctl status hysteriaclient@* --no-pager 2>/dev/null || echo "没有运行的客户端实例"
                 read -t 30 -n 1 -s -r -p "按任意键继续..."
                 ;;
-            6) bash /root/hysteria/config.sh uninstall ;;
+            6) bash ./config.sh uninstall ;;
             0) exit 0 ;;
             *)
                 printf "%b无效选择%b\n" "${RED}" "${NC}"
@@ -110,41 +110,6 @@ NC='\033[0m'
 HYSTERIA_BIN="/usr/local/bin/hysteria"
 SYSTEMD_DIR="/etc/systemd/system"
 CONFIG_DIR="/etc/hysteria"
-DEFAULT_BATCH_SIZE=10
-
-# 写入节流与临时目录分批落盘（可通过环境变量控制）
-WRITE_TMP="${HY2_WRITE_TMP:-1}"
-SYNC_EVERY="${HY2_SYNC_EVERY:-15}"
-WRITE_SLEEP_MS="${HY2_WRITE_SLEEP_MS:-100}"
-ENABLE_RUNTIME="${HY2_ENABLE_RUNTIME:-0}"
-USE_IONICE="${HY2_IONICE:-1}"
-
-if [ "$WRITE_TMP" = "1" ]; then
-    STAGE_ETC="/dev/shm/hy2_build/etc/hysteria"
-    STAGE_ROOT="/dev/shm/hy2_build/root"
-    mkdir -p "$STAGE_ETC" "$STAGE_ROOT"
-    CONFIG_OUT_DIR="$STAGE_ETC"
-    CLIENT_OUT_DIR="$STAGE_ROOT"
-else
-    CONFIG_OUT_DIR="$CONFIG_DIR"
-    CLIENT_OUT_DIR="/root"
-fi
-
-rsync_safe() {
-    if [ "$USE_IONICE" = "1" ]; then
-        ionice -c2 -n7 nice -n 10 rsync -a "$1"/ "$2"/
-    else
-        rsync -a "$1"/ "$2"/
-    fi
-}
-
-systemctl_safe() {
-    if [ "$USE_IONICE" = "1" ]; then
-        ionice -c2 -n7 nice -n 10 systemctl "$@"
-    else
-        systemctl "$@"
-    fi
-}
 DEFAULT_BATCH_SIZE=10
 
 check_env() {
@@ -232,9 +197,7 @@ WantedBy=multi-user.target
 EOF
     
     # 启用服务（不重新加载systemd）
-    enable_args=""
-    [ "$ENABLE_RUNTIME" = "1" ] && enable_args="--runtime"
-    if systemctl_safe enable $enable_args "hysteria-server@${port}.service" >/dev/null 2>&1; then
+    if systemctl enable "hysteria-server@${port}.service" >/dev/null 2>&1; then
         echo -e "${GREEN}服务 hysteria-server@${port}.service 已启用${NC}"
     else
         echo -e "${RED}启用服务 hysteria-server@${port}.service 失败${NC}"
@@ -268,9 +231,7 @@ WantedBy=multi-user.target
 EOF
     
     # 启用服务（不重新加载systemd）
-    enable_args=""
-    [ "$ENABLE_RUNTIME" = "1" ] && enable_args="--runtime"
-    if systemctl_safe enable $enable_args "hysteria-server@${port}.service" >/dev/null 2>&1; then
+    if systemctl enable "hysteria-server@${port}.service" >/dev/null 2>&1; then
         echo -e "${GREEN}服务 hysteria-server@${port}.service 已启用${NC}"
     else
         echo -e "${RED}启用服务 hysteria-server@${port}.service 失败${NC}"
@@ -278,16 +239,15 @@ EOF
     fi
 }
 
-# 创建服务端统一服务（优化版）
+# 创建服务端统一服务
 create_server_unified_service() {
     local unit_file="${SYSTEMD_DIR}/hysteria-server-manager.service"
     local script_file="/usr/local/bin/hysteria-server-manager.sh"
-    local monitor_script="/usr/local/bin/hysteria-monitor.sh"
     
-    # 创建优化的启动脚本
+    # 创建启动脚本
     cat >"$script_file" <<'EOF'
 #!/bin/bash
-# Hysteria Server Manager Script (Optimized for 100+ instances)
+# Hysteria Server Manager Script
 
 CONFIG_DIR="/etc/hysteria"
 HYSTERIA_BIN="/usr/local/bin/hysteria"
@@ -325,19 +285,9 @@ fi
 
 echo "找到 ${#configs[@]} 个配置文件，开始分批启动..."
 
-# 智能分批启动：根据配置数量调整批次大小
+# 分批启动，每批5个服务
+batch_size=5
 total_configs=${#configs[@]}
-if [ $total_configs -le 30 ]; then
-    batch_size=10
-    sleep_interval=2
-elif [ $total_configs -le 100 ]; then
-    batch_size=15
-    sleep_interval=3
-else
-    batch_size=20
-    sleep_interval=4
-fi
-
 started_pids=()
 
 for i in "${!configs[@]}"; do
@@ -345,18 +295,16 @@ for i in "${!configs[@]}"; do
     config_count=$((i + 1))
     
     echo "Starting server with config: $cfg (${config_count}/${total_configs})"
-    
-    # 使用 ionice 和 nice 降低优先级，减少系统负载
-    ionice -c2 -n7 nice -n 10 "$HYSTERIA_BIN" server -c "$cfg" &
+    "$HYSTERIA_BIN" server -c "$cfg" &
     pid=$!
     started_pids+=("$pid")
     
     # 每启动一批后暂停一下，避免系统负载过高
     if (( (i + 1) % batch_size == 0 )) && (( i + 1 < total_configs )); then
-        echo "已启动 $((i + 1))/$total_configs 个服务，暂停 ${sleep_interval} 秒..."
-        sleep $sleep_interval
+        echo "已启动 $((i + 1))/$total_configs 个服务，暂停 2 秒..."
+        sleep 2
     else
-        sleep 0.2  # 减少间隔时间，提高启动速度
+        sleep 0.1
     fi
 done
 
@@ -371,67 +319,29 @@ EOF
     
     chmod +x "$script_file"
     
-    # 创建监控脚本
-    cat >"$monitor_script" <<'EOF'
-#!/bin/bash
-echo "=== Hysteria2 统一服务监控 ==="
-echo "内存使用:"
-free -h | grep -E "Mem|Swap"
-echo
-echo "CPU使用率:"
-top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1
-echo
-echo "Hysteria进程数量:"
-pgrep -c hysteria
-echo
-echo "文件描述符使用:"
-if pgrep hysteria >/dev/null; then
-    lsof -p $(pgrep hysteria | head -1) 2>/dev/null | wc -l
-else
-    echo "0"
-fi
-echo
-echo "网络连接数:"
-ss -tuln | grep -c ":"
-echo
-echo "服务状态:"
-systemctl is-active hysteria-server-manager.service
-EOF
-    
-    chmod +x "$monitor_script"
-    
-    # 创建优化的统一服务文件
+    # 创建统一服务文件
     cat >"$unit_file" <<EOF
 [Unit]
-Description=Hysteria2 Server Manager - Manages all server configurations (Optimized)
+Description=Hysteria2 Server Manager - Manages all server configurations
 After=network.target
 
 [Service]
 Type=simple
 ExecStart=$script_file
 Restart=always
-RestartSec=5
+RestartSec=3
 User=root
 PIDFile=/var/run/hysteria-server-manager.pid
-# 资源限制优化（无限制）
-# MemoryMax=75%
-# CPUQuota=75%
+# 资源限制优化
+MemoryMax=2G
+CPUQuota=50%
 Nice=5
 IOSchedulingClass=1
 IOSchedulingPriority=4
-# TasksMax=200
-# LimitNOFILE=2048
 # 进程管理
 KillMode=mixed
 KillSignal=SIGTERM
-TimeoutStopSec=60
-# 环境变量
-Environment="HY2_BATCH_SIZE=8"
-Environment="HY2_WRITE_TMP=1"
-Environment="HY2_SYNC_EVERY=10"
-Environment="HY2_WRITE_SLEEP_MS=50"
-Environment="HY2_IONICE=1"
-Environment="HY2_ENABLE_RUNTIME=1"
+TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target
@@ -443,7 +353,6 @@ EOF
     # 启用服务
     if systemctl enable "hysteria-server-manager.service" >/dev/null 2>&1; then
         echo -e "${GREEN}统一服务 hysteria-server-manager.service 已启用${NC}"
-        echo -e "${GREEN}监控脚本: /usr/local/bin/hysteria-monitor.sh${NC}"
     else
         echo -e "${RED}启用统一服务 hysteria-server-manager.service 失败${NC}"
         return 1
@@ -519,7 +428,6 @@ generate_instances_batch() {
     # 收集要创建的端口列表
     ports_to_create=()
     configs_to_create=()
-    created_count=0
     
     while read -r proxy_raw; do
         [[ -z "$proxy_raw" ]] && continue
@@ -533,50 +441,9 @@ generate_instances_batch() {
         current_port=$((current_port + 1))
         password=$(openssl rand -base64 16)
         proxy_url="http://$proxy_user:$proxy_pass@$proxy_ip:$proxy_port"
-        config_file="$CONFIG_OUT_DIR/config_${server_port}.yaml"
+        config_file="$CONFIG_DIR/config_${server_port}.yaml"
 
-        # 根据部署模式生成不同的服务端配置
-        if [[ "$deploy_mode" == "1" ]]; then
-            # 双端同机模式：服务端只监听本地回环
-            cat >"$config_file" <<EOF
-listen: 127.0.0.1:$server_port
-
-tls:
-  cert: $crt
-  key: $key
-
-auth:
-  type: password
-  password: $password
-
-masquerade:
-  proxy:
-    url: https://www.bing.com
-    rewriteHost: true
-
-quic:
-  initStreamReceiveWindow: 26843545
-  maxStreamReceiveWindow: 26843545
-  initConnReceiveWindow: 67108864
-  maxConnReceiveWindow: 67108864
-
-bandwidth:
-  up: ${up_bw} mbps
-  down: ${down_bw} mbps
-
-outbounds:
-  - name: my_proxy
-    type: http
-    http:
-      url: $proxy_url
-
-acl:
-  inline:
-    - my_proxy(all)
-EOF
-        else
-            # 双端不同机模式：服务端监听所有接口
-            cat >"$config_file" <<EOF
+        cat >"$config_file" <<EOF
 listen: :$server_port
 
 tls:
@@ -612,13 +479,12 @@ acl:
   inline:
     - my_proxy(all)
 EOF
-        fi
 
         # 收集端口和配置文件信息
         ports_to_create+=("$server_port")
         configs_to_create+=("$config_file")
 
-        local client_cfg="$CLIENT_OUT_DIR/${domain}_${server_port}.json"
+        local client_cfg="/root/${domain}_${server_port}.json"
         cat >"$client_cfg" <<EOF
 {
   "server": "$server_address:$server_port",
@@ -659,36 +525,9 @@ EOF
 EOF
         echo -e "\n${GREEN}已生成端口 $server_port 实例，密码：$password"
         echo "服务端配置: $config_file"
-        if [[ "$deploy_mode" == "1" ]]; then
-            echo -e "${YELLOW}双端同机模式 - 代理端口：${NC}"
-            echo -e "${YELLOW}  Hysteria2协议: 127.0.0.1:$server_port${NC}"
-            echo -e "${YELLOW}  HTTP代理: 0.0.0.0:$server_port${NC}"
-            echo -e "${YELLOW}  SOCKS5代理: 0.0.0.0:$server_port${NC}"
-        elif [[ "$deploy_mode" == "2" ]]; then
-            echo "客户端配置: $client_cfg"
-        fi
+        echo "客户端配置: $client_cfg"
         echo "--------------------------------------${NC}"
-
-        created_count=$((created_count + 1))
-        # 每写入一定数量后同步到磁盘，避免写入风暴
-        if [ "$WRITE_TMP" = "1" ] && [ $created_count -ge $SYNC_EVERY ]; then
-            echo -e "${YELLOW}正在分批落盘...${NC}"
-            mkdir -p "$CONFIG_DIR" 
-            rsync_safe "$STAGE_ETC" "$CONFIG_DIR"
-            rsync_safe "$STAGE_ROOT" "/root"
-            created_count=0
-        fi
-        # 轻微节流
-        [ "$WRITE_SLEEP_MS" -gt 0 ] && sleep 0.1
     done <<< "$proxies"
-
-    # 最终落盘
-    if [ "$WRITE_TMP" = "1" ]; then
-        echo -e "${YELLOW}正在最终落盘...${NC}"
-        mkdir -p "$CONFIG_DIR"
-        rsync_safe "$STAGE_ETC" "$CONFIG_DIR"
-        rsync_safe "$STAGE_ROOT" "/root"
-    fi
     
     # 询问启动方式
     echo -e "${YELLOW}选择启动方式：${NC}"
@@ -710,7 +549,7 @@ EOF
             
             # 一次性重新加载systemd配置
             echo -e "${YELLOW}正在重新加载systemd配置...${NC}"
-            systemctl_safe daemon-reload
+            systemctl daemon-reload
             
             # 批量启动所有服务（优化启动策略）
             echo -e "${YELLOW}正在批量启动所有服务...${NC}"
@@ -726,12 +565,12 @@ EOF
             for i in "${!ports_to_create[@]}"; do
                 local port="${ports_to_create[$i]}"
                 
-                if systemctl_safe start "hysteria-server@${port}.service"; then
+                if systemctl start "hysteria-server@${port}.service"; then
                     echo -e "${GREEN}✓ 服务 hysteria-server@${port}.service 启动成功${NC}"
                     ((started_count++))
                 else
                     echo -e "${RED}✗ 服务 hysteria-server@${port}.service 启动失败${NC}"
-                    systemctl_safe status "hysteria-server@${port}.service" --no-pager
+                    systemctl status "hysteria-server@${port}.service" --no-pager
                 fi
                 
                 # 每启动一批后暂停一下，避免系统负载过高
@@ -1083,11 +922,10 @@ manage_all_instances_internal() {
     echo -e "${YELLOW}选择管理方式：${NC}"
     echo "1. 使用统一服务管理（如果使用统一服务）"
     echo "2. 使用多实例服务管理（如果使用多实例服务）"
-    echo "3. 直接启动进程（速度快，但重启后需要手动启动）"
-    echo "4. 自动检测并管理（推荐）"
-    read -p "请选择 [1-4]: " manage_method
+    echo "3. 自动检测并管理（推荐）"
+    read -p "请选择 [1-3]: " manage_method
     
-            case "$manage_method" in
+    case "$manage_method" in
         1)
             # 统一服务管理
             case "$act" in
@@ -1146,61 +984,6 @@ manage_all_instances_internal() {
             done < <(ls $CONFIG_DIR/config_*.yaml 2>/dev/null)
             ;;
         3)
-            # 直接启动进程管理
-            while IFS= read -r f; do
-                port=$(basename "$f" | sed 's/^config_//;s/\.yaml$//')
-                config_file="$f"
-                case "$act" in
-                    1) 
-                        # 检查是否已有进程在运行
-                        if pgrep -f "hysteria.*server.*-c.*$config_file" >/dev/null; then
-                            echo -e "${YELLOW}端口 $port 的进程已在运行，跳过${NC}"
-                            continue
-                        fi
-                        
-                        # 后台启动hysteria进程
-                        nohup $HYSTERIA_BIN server -c "$config_file" >/dev/null 2>&1 &
-                        local pid=$!
-                        
-                        # 等待一下确保进程启动
-                        sleep 0.5
-                        
-                        # 检查进程是否成功启动
-                        if kill -0 "$pid" 2>/dev/null; then
-                            echo -e "${GREEN}✓ 端口 $port 的hysteria进程启动成功 (PID: $pid)${NC}"
-                        else
-                            echo -e "${RED}✗ 端口 $port 的hysteria进程启动失败${NC}"
-                        fi
-                        ;;
-                    2) 
-                        # 停止进程
-                        if pkill -f "hysteria.*server.*-c.*$config_file" >/dev/null 2>&1; then
-                            echo -e "${YELLOW}✓ 已停止端口 $port 的进程${NC}"
-                        else
-                            echo -e "${RED}✗ 停止端口 $port 的进程失败${NC}"
-                        fi
-                        ;;
-                    3) 
-                        # 重启进程
-                        if pkill -f "hysteria.*server.*-c.*$config_file" >/dev/null 2>&1; then
-                            sleep 1
-                            nohup $HYSTERIA_BIN server -c "$config_file" >/dev/null 2>&1 &
-                            local pid=$!
-                            sleep 0.5
-                            if kill -0 "$pid" 2>/dev/null; then
-                                echo -e "${GREEN}✓ 端口 $port 的hysteria进程重启成功 (PID: $pid)${NC}"
-                            else
-                                echo -e "${RED}✗ 端口 $port 的hysteria进程重启失败${NC}"
-                            fi
-                        else
-                            echo -e "${RED}✗ 停止端口 $port 的进程失败${NC}"
-                        fi
-                        ;;
-                    *) echo -e "${RED}无效选择${NC}" ;;
-                esac
-            done < <(ls $CONFIG_DIR/config_*.yaml 2>/dev/null)
-            ;;
-        4)
             # 自动检测并管理
             if systemctl is-active --quiet hysteria-server-manager.service 2>/dev/null; then
                 # 是统一服务
@@ -1536,11 +1319,11 @@ acl:
         server_listen=":$server_port"  # 双端不同机：监听所有接口
     fi
 
-    local config_file="$CONFIG_OUT_DIR/config_${server_port}.yaml"
+    local config_file="$CONFIG_DIR/config_${server_port}.yaml"
     if [[ "$deploy_mode" == "1" ]]; then
         # 双端同机模式：服务端直接提供HTTP/SOCKS5代理
         cat >"$config_file" <<EOF
-listen: 127.0.0.1:$server_port
+listen: $server_listen
 
 tls:
   cert: $crt
@@ -1564,6 +1347,17 @@ quic:
 bandwidth:
   up: ${up_bw} mbps
   down: ${down_bw} mbps
+
+http:
+  listen: 0.0.0.0:$server_port
+  username: $proxy_username
+  password: $proxy_password
+  realm: $http_realm
+
+socks5:
+  listen: 0.0.0.0:$server_port
+  username: $proxy_username
+  password: $proxy_password
 $proxy_config
 EOF
     else
@@ -1607,7 +1401,7 @@ EOF
         1)
             # 多实例服务模式
             create_systemd_unit "$server_port" "$config_file"
-            systemctl_safe restart "hysteria-server@${server_port}.service"
+            systemctl restart "hysteria-server@${server_port}.service"
             ;;
         2)
             # 直接进程模式
@@ -1620,8 +1414,8 @@ EOF
                 sleep 1
             fi
             
-            # 后台启动hysteria进程（降低优先级）
-            ionice -c2 -n7 nice -n 10 nohup $HYSTERIA_BIN server -c "$config_file" >/dev/null 2>&1 &
+            # 后台启动hysteria进程
+            nohup $HYSTERIA_BIN server -c "$config_file" >/dev/null 2>&1 &
             local pid=$!
             
             # 等待一下确保进程启动
@@ -1636,96 +1430,10 @@ EOF
             ;;
     esac
 
-    # 根据部署模式生成客户端配置
-    if [[ "$deploy_mode" == "1" ]]; then
-        # 双端同机模式：客户端监听外部端口提供HTTP/SOCKS5代理
-        local client_cfg="$CLIENT_OUT_DIR/${domain}_${server_port}.json"
+    if [[ "$deploy_mode" == "2" ]]; then
+        # 双端不同机模式：生成客户端配置文件
+        local client_cfg="/root/${domain}_${server_port}.json"
         cat >"$client_cfg" <<EOF
-{
-  "server": "127.0.0.1:$server_port",
-  "auth": "$password",
-  "transport": {
-    "type": "udp",
-    "udp": {
-      "hopInterval": "10s"
-    }
-  },
-  "tls": {
-    "sni": "www.bing.com",
-    "insecure": true,
-    "alpn": ["h3"]
-  },
-  "quic": {
-    "initStreamReceiveWindow": 26843545,
-    "maxStreamReceiveWindow": 26843545,
-    "initConnReceiveWindow": 67108864,
-    "maxConnReceiveWindow": 67108864
-  },
-  "bandwidth": {
-    "up": "${up_bw} mbps",
-    "down": "${down_bw} mbps"
-  },
-  "http": {
-    "listen": "0.0.0.0:$server_port",
-    "username": "$proxy_username",
-    "password": "$proxy_password",
-    "realm": "$http_realm"
-  },
-  "socks5": {
-    "listen": "0.0.0.0:$server_port",
-    "username": "$proxy_username",
-    "password": "$proxy_password"
-  }
-}
-EOF
-    elif [[ "$deploy_mode" == "2" ]]; then
-        # 双端不同机模式：客户端连接到远程服务器
-        # 根据部署模式生成客户端配置
-        if [[ "$deploy_mode" == "1" ]]; then
-            # 双端同机模式：客户端监听外部端口提供HTTP/SOCKS5代理
-            local client_cfg="$CLIENT_OUT_DIR/${domain}_${server_port}.json"
-            cat >"$client_cfg" <<EOF
-{
-  "server": "127.0.0.1:$server_port",
-  "auth": "$password",
-  "transport": {
-    "type": "udp",
-    "udp": {
-      "hopInterval": "10s"
-    }
-  },
-  "tls": {
-    "sni": "www.bing.com",
-    "insecure": true,
-    "alpn": ["h3"]
-  },
-  "quic": {
-    "initStreamReceiveWindow": 26843545,
-    "maxStreamReceiveWindow": 26843545,
-    "initConnReceiveWindow": 67108864,
-    "maxConnReceiveWindow": 67108864
-  },
-  "bandwidth": {
-    "up": "${up_bw} mbps",
-    "down": "${down_bw} mbps"
-  },
-  "http": {
-    "listen": "0.0.0.0:$server_port",
-    "username": "$proxy_username",
-    "password": "$proxy_password",
-    "realm": "$http_realm"
-  },
-  "socks5": {
-    "listen": "0.0.0.0:$server_port",
-    "username": "$proxy_username",
-    "password": "$proxy_password"
-  }
-}
-EOF
-        elif [[ "$deploy_mode" == "2" ]]; then
-            # 双端不同机模式：客户端连接到远程服务器
-            local client_cfg="$CLIENT_OUT_DIR/${domain}_${server_port}.json"
-            cat >"$client_cfg" <<EOF
 {
   "server": "$server_address:$server_port",
   "auth": "$password",
@@ -1763,7 +1471,6 @@ EOF
   }
 }
 EOF
-        fi
     fi
 
     echo -e "${GREEN}实例已创建并启动。${NC}"
@@ -1887,53 +1594,16 @@ fi
 pids=()
 config_count=0
 
-# 获取配置文件列表
-config_files=($(find "$CONFIG_DIR" -name "*.json" -type f | sort))
-total_configs=${#config_files[@]}
-
-if [ $total_configs -eq 0 ]; then
-    echo "未找到客户端配置文件"
-    exit 1
-fi
-
-echo "找到 $total_configs 个客户端配置文件，开始分批启动..."
-
-# 智能分批启动
-if [ $total_configs -le 30 ]; then
-    batch_size=10
-    sleep_interval=2
-elif [ $total_configs -le 100 ]; then
-    batch_size=15
-    sleep_interval=3
-else
-    batch_size=20
-    sleep_interval=4
-fi
-
-for ((i=0; i<total_configs; i+=batch_size)); do
-    batch_end=$((i + batch_size))
-    if [ $batch_end -gt $total_configs ]; then
-        batch_end=$total_configs
-    fi
-    
-    echo "启动批次 $((i/batch_size + 1)) (配置 $((i+1))-$batch_end/$total_configs)..."
-    
-    for ((j=i; j<batch_end; j++)); do
-        cfg="${config_files[j]}"
+for cfg in "$CONFIG_DIR"/*.json; do
+    if [ -f "$cfg" ]; then
         config_count=$((config_count + 1))
         
         echo "Starting client with config: $cfg (${config_count})"
-        # 降低进程优先级
-        ionice -c2 -n7 nice -n 10 "$HYSTERIA_BIN" client -c "$cfg" &
+        "$HYSTERIA_BIN" client -c "$cfg" &
         pids+=($!)
         
-        # 轻微节流
-        sleep 0.2
-    done
-    
-    if [ $batch_end -lt $total_configs ]; then
-        echo "已启动 $batch_end/$total_configs 个配置，暂停 ${sleep_interval} 秒..."
-        sleep $sleep_interval
+        # 减少延迟，提高启动速度
+        sleep 0.1
     fi
 done
 
@@ -1959,18 +1629,12 @@ After=network.target
 Type=simple
 ExecStart=/usr/local/bin/hysteria-client-manager.sh
 Restart=always
-RestartSec=5
+RestartSec=3
 User=root
 PIDFile=/var/run/hysteria-client-manager.pid
-# 资源限制优化（无限制）
-# MemoryMax=75%
-# CPUQuota=75%
-Nice=5
+Nice=-10
 IOSchedulingClass=1
 IOSchedulingPriority=4
-# TasksMax=200
-# LimitNOFILE=2048
-TimeoutStopSec=60
 
 [Install]
 WantedBy=multi-user.target
@@ -2861,8 +2525,6 @@ while true; do
 done
 CLIENTEOF
     chmod +x /root/hysteria/client.sh
-
-    
 
     # 创建并赋权 config.sh
 cat > /root/hysteria/config.sh << 'CONFIGEOF'
