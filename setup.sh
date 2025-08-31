@@ -69,11 +69,11 @@ main_menu() {
         }
         
         case $choice in
-            1) bash /root/hysteria/config.sh install ;;
-            2) bash /root/hysteria/server.sh ;;
-            3) bash /root/hysteria/client.sh ;;
-            4) bash /root/hysteria/config.sh optimize ;;
-            5) bash /root/hysteria/config.sh update ;;
+            1) bash ./config.sh install ;;
+            2) bash ./server.sh ;;
+            3) bash ./client.sh ;;
+            4) bash ./config.sh optimize ;;
+            5) bash ./config.sh update ;;
             6)
                 echo -e "${YELLOW}服务端状态:${NC}"
                 systemctl status hysteria-server@* --no-pager 2>/dev/null || echo "没有运行的服务端实例"
@@ -82,7 +82,7 @@ main_menu() {
                 systemctl status hysteriaclient@* --no-pager 2>/dev/null || echo "没有运行的客户端实例"
                 read -t 30 -n 1 -s -r -p "按任意键继续..."
                 ;;
-            7) bash /root/hysteria/config.sh uninstall ;;
+            7) bash ./config.sh uninstall ;;
             0) exit 0 ;;
             *)
                 printf "%b无效选择%b\n" "${RED}" "${NC}"
@@ -217,97 +217,6 @@ EOF
         echo -e "${GREEN}服务 hysteria-server@${port}.service 已启用${NC}"
     else
         echo -e "${RED}启用服务 hysteria-server@${port}.service 失败${NC}"
-        return 1
-    fi
-}
-
-# 创建客户端统一服务
-create_client_unified_service() {
-    local unit_file="${SYSTEMD_DIR}/hysteria-client-manager.service"
-    local script_file="/usr/local/bin/hysteria-client-manager.sh"
-    
-    # 创建启动脚本
-    cat >"$script_file" <<'EOF'
-#!/bin/bash
-# Hysteria Client Manager Script
-
-CONFIG_DIR="/root"
-HYSTERIA_BIN="/usr/local/bin/hysteria"
-PID_FILE="/var/run/hysteria-client-manager.pid"
-
-# 创建PID文件目录
-mkdir -p "$(dirname "$PID_FILE")"
-
-# 停止已存在的进程
-if [ -f "$PID_FILE" ]; then
-    pkill -F "$PID_FILE" 2>/dev/null || true
-    rm -f "$PID_FILE"
-fi
-
-# 启动所有配置文件（优化性能）
-pids=()
-config_count=0
-
-for cfg in "$CONFIG_DIR"/*.json; do
-    if [ -f "$cfg" ]; then
-        config_count=$((config_count + 1))
-        
-        echo "Starting client with config: $cfg (${config_count})"
-        "$HYSTERIA_BIN" client -c "$cfg" &
-        pids+=($!)
-        
-        # 减少延迟，提高启动速度
-        sleep 0.1
-    fi
-done
-
-echo "总共启动了 $config_count 个客户端配置"
-
-# 保存PID到文件
-echo "${pids[@]}" > "$PID_FILE"
-
-# 等待所有进程
-wait
-EOF
-    
-    chmod +x "$script_file"
-    
-    # 创建统一服务文件
-    cat >"$unit_file" <<EOF
-[Unit]
-Description=Hysteria2 Client Manager - Manages all client configurations
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=$script_file
-Restart=always
-RestartSec=3
-User=root
-PIDFile=/var/run/hysteria-client-manager.pid
-# 资源限制优化
-MemoryMax=2G
-CPUQuota=50%
-Nice=5
-IOSchedulingClass=1
-IOSchedulingPriority=4
-# 进程管理
-KillMode=mixed
-KillSignal=SIGTERM
-TimeoutStopSec=30
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    
-    # 重新加载systemd配置
-    systemctl daemon-reload
-    
-    # 启用服务
-    if systemctl enable "hysteria-client-manager.service" >/dev/null 2>&1; then
-        echo -e "${GREEN}统一服务 hysteria-client-manager.service 已启用${NC}"
-    else
-        echo -e "${RED}启用统一服务 hysteria-client-manager.service 失败${NC}"
         return 1
     fi
 }
@@ -514,47 +423,7 @@ generate_instances_batch() {
         proxy_url="http://$proxy_user:$proxy_pass@$proxy_ip:$proxy_port"
         config_file="$CONFIG_DIR/config_${server_port}.yaml"
 
-        if [[ "$deploy_mode" == "1" ]]; then
-            # 双端同机模式：服务端监听本地回环，转发到代理出口
-            cat >"$config_file" <<EOF
-listen: 127.0.0.1:$server_port
-
-tls:
-  cert: $crt
-  key: $key
-
-auth:
-  type: password
-  password: $password
-
-masquerade:
-  proxy:
-    url: https://www.bing.com
-    rewriteHost: true
-
-quic:
-  initStreamReceiveWindow: 26843545
-  maxStreamReceiveWindow: 26843545
-  initConnReceiveWindow: 67108864
-  maxConnReceiveWindow: 67108864
-
-bandwidth:
-  up: ${up_bw} mbps
-  down: ${down_bw} mbps
-
-outbounds:
-  - name: my_proxy
-    type: http
-    http:
-      url: $proxy_url
-
-acl:
-  inline:
-    - my_proxy(all)
-EOF
-        else
-            # 双端不同机模式：服务端只提供Hysteria协议
-            cat >"$config_file" <<EOF
+        cat >"$config_file" <<EOF
 listen: :$server_port
 
 tls:
@@ -590,61 +459,13 @@ acl:
   inline:
     - my_proxy(all)
 EOF
-        fi
 
         # 收集端口和配置文件信息
         ports_to_create+=("$server_port")
         configs_to_create+=("$config_file")
 
-        if [[ "$deploy_mode" == "1" ]]; then
-            # 双端同机模式：生成客户端配置文件，监听外部端口
-            local client_cfg="/root/${domain}_${server_port}.json"
-            cat >"$client_cfg" <<EOF
-{
-  "server": "127.0.0.1:$server_port",
-  "auth": "$password",
-  "transport": {
-    "type": "udp",
-    "udp": {
-      "hopInterval": "10s"
-    }
-  },
-  "tls": {
-    "sni": "www.bing.com",
-    "insecure": true,
-    "alpn": ["h3"]
-  },
-  "quic": {
-    "initStreamReceiveWindow": 26843545,
-    "maxStreamReceiveWindow": 26843545,
-    "initConnReceiveWindow": 67108864,
-    "maxConnReceiveWindow": 67108864
-  },
-  "bandwidth": {
-    "up": "${up_bw} mbps",
-    "down": "${down_bw} mbps"
-  },
-  "http": {
-    "listen": "0.0.0.0:$server_port",
-    "username": "$proxy_username",
-    "password": "$proxy_password",
-    "realm": "$http_realm"
-  },
-  "socks5": {
-    "listen": "0.0.0.0:$server_port",
-    "username": "$proxy_username",
-    "password": "$proxy_password"
-  }
-}
-EOF
-                    echo -e "\n${GREEN}已生成端口 $server_port 实例，密码：$password"
-        echo "服务端配置: $config_file (监听127.0.0.1:$server_port，转发到代理出口)"
-        echo "客户端配置: $client_cfg (监听0.0.0.0:$server_port，提供HTTP/SOCKS5代理)"
-        echo "--------------------------------------${NC}"
-        elif [[ "$deploy_mode" == "2" ]]; then
-            # 双端不同机模式：生成客户端配置文件
-            local client_cfg="/root/${domain}_${server_port}.json"
-            cat >"$client_cfg" <<EOF
+        local client_cfg="/root/${domain}_${server_port}.json"
+        cat >"$client_cfg" <<EOF
 {
   "server": "$server_address:$server_port",
   "auth": "$password",
@@ -682,11 +503,10 @@ EOF
   }
 }
 EOF
-            echo -e "\n${GREEN}已生成端口 $server_port 实例，密码：$password"
-            echo "服务端配置: $config_file"
-            echo "客户端配置: $client_cfg"
-            echo "--------------------------------------${NC}"
-        fi
+        echo -e "\n${GREEN}已生成端口 $server_port 实例，密码：$password"
+        echo "服务端配置: $config_file"
+        echo "客户端配置: $client_cfg"
+        echo "--------------------------------------${NC}"
     done <<< "$proxies"
     
     # 询问启动方式
@@ -798,25 +618,99 @@ EOF
             ;;
     esac
     
-    # 双端同机模式下需要启动客户端服务来提供HTTP/SOCKS5代理
+    # 双端同机模式下自动启动客户端
     if [[ "$deploy_mode" == "1" ]]; then
-        echo -e "${YELLOW}检测到双端同机模式，正在启动客户端服务提供HTTP/SOCKS5代理...${NC}"
+        echo -e "${YELLOW}检测到双端同机模式，正在自动启动客户端服务...${NC}"
         
-        # 确保客户端启动脚本存在
-        if [ ! -f "/usr/local/bin/hysteria-client-manager.sh" ]; then
-            echo -e "${YELLOW}正在创建客户端启动脚本...${NC}"
-            create_client_unified_service
-        fi
-        
-        # 启动客户端统一服务
-        if systemctl enable --now hysteria-client-manager.service &>/dev/null; then
-            echo -e "${GREEN}✓ 客户端统一服务启动成功${NC}"
+        # 检查客户端服务是否存在
+        if systemctl list-unit-files | grep -q "hysteria-client-manager.service"; then
+            if systemctl is-active --quiet hysteria-client-manager.service 2>/dev/null; then
+                echo -e "${GREEN}✓ 客户端服务已在运行${NC}"
+            else
+                echo -e "${YELLOW}正在启动客户端服务...${NC}"
+                if systemctl start hysteria-client-manager.service; then
+                    echo -e "${GREEN}✓ 客户端服务启动成功${NC}"
+                else
+                    echo -e "${RED}✗ 客户端服务启动失败${NC}"
+                    echo -e "${YELLOW}请手动启动客户端服务：systemctl start hysteria-client-manager.service${NC}"
+                fi
+            fi
         else
-            echo -e "${RED}✗ 客户端统一服务启动失败${NC}"
-        fi
+            echo -e "${YELLOW}客户端服务未安装，正在创建并启动...${NC}"
+            
+            # 创建客户端启动脚本
+            CLIENT_SCRIPT="/usr/local/bin/hysteria-client-manager.sh"
+            cat > "$CLIENT_SCRIPT" <<'EOF'
+#!/bin/bash
+# Hysteria Client Manager Script
+
+CONFIG_DIR="/root"
+HYSTERIA_BIN="/usr/local/bin/hysteria"
+PID_FILE="/var/run/hysteria-client-manager.pid"
+
+# 创建PID文件目录
+mkdir -p "$(dirname "$PID_FILE")"
+
+# 停止已存在的进程
+if [ -f "$PID_FILE" ]; then
+    pkill -F "$PID_FILE" 2>/dev/null || true
+    rm -f "$PID_FILE"
+fi
+
+# 启动所有配置文件
+pids=()
+config_count=0
+
+for cfg in "$CONFIG_DIR"/*.json; do
+    if [ -f "$cfg" ]; then
+        config_count=$((config_count + 1))
         
-        echo -e "${GREEN}✓ 双端同机模式：服务端监听本地回环，客户端提供HTTP/SOCKS5代理服务${NC}"
-        echo -e "${YELLOW}提示：客户端服务已启动，可通过外部端口使用代理${NC}"
+        echo "Starting client with config: $cfg (${config_count})"
+        "$HYSTERIA_BIN" client -c "$cfg" &
+        pids+=($!)
+        
+        sleep 0.1
+    fi
+done
+
+echo "总共启动了 $config_count 个客户端配置"
+
+# 保存PID到文件
+echo "${pids[@]}" > "$PID_FILE"
+
+# 等待所有进程
+wait
+EOF
+            chmod +x "$CLIENT_SCRIPT"
+            
+            # 创建systemd服务
+            SERVICE_FILE="/etc/systemd/system/hysteria-client-manager.service"
+            cat > "$SERVICE_FILE" <<EOF
+[Unit]
+Description=Hysteria Client Manager - Manages all client configurations
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/hysteria-client-manager.sh
+Restart=always
+RestartSec=3
+User=root
+PIDFile=/var/run/hysteria-client-manager.pid
+
+[Install]
+WantedBy=multi-user.target
+EOF
+            
+            systemctl daemon-reload
+            
+            if systemctl start hysteria-client-manager.service; then
+                echo -e "${GREEN}✓ 客户端服务创建并启动成功${NC}"
+            else
+                echo -e "${RED}✗ 客户端服务启动失败${NC}"
+                echo -e "${YELLOW}请手动启动客户端服务：systemctl start hysteria-client-manager.service${NC}"
+            fi
+        fi
     fi
 }
 
@@ -1433,9 +1327,9 @@ acl:
 
     local config_file="$CONFIG_DIR/config_${server_port}.yaml"
     if [[ "$deploy_mode" == "1" ]]; then
-        # 双端同机模式：服务端监听本地回环，转发到代理出口
+        # 双端同机模式：服务端直接提供HTTP/SOCKS5代理
         cat >"$config_file" <<EOF
-listen: 127.0.0.1:$server_port
+listen: $server_listen
 
 tls:
   cert: $crt
@@ -1460,15 +1354,17 @@ bandwidth:
   up: ${up_bw} mbps
   down: ${down_bw} mbps
 
-outbounds:
-  - name: my_proxy
-    type: http
-    http:
-      url: $proxy_url
+http:
+  listen: 0.0.0.0:$server_port
+  username: $proxy_username
+  password: $proxy_password
+  realm: $http_realm
 
-acl:
-  inline:
-    - my_proxy(all)
+socks5:
+  listen: 0.0.0.0:$server_port
+  username: $proxy_username
+  password: $proxy_password
+$proxy_config
 EOF
     else
         # 双端不同机模式：服务端只提供Hysteria协议
@@ -1576,48 +1472,7 @@ EOF
             ;;
     esac
 
-    if [[ "$deploy_mode" == "1" ]]; then
-        # 双端同机模式：生成客户端配置文件，监听外部端口
-        local client_cfg="/root/${domain}_${server_port}.json"
-        cat >"$client_cfg" <<EOF
-{
-  "server": "127.0.0.1:$server_port",
-  "auth": "$password",
-  "transport": {
-    "type": "udp",
-    "udp": {
-      "hopInterval": "10s"
-    }
-  },
-  "tls": {
-    "sni": "www.bing.com",
-    "insecure": true,
-    "alpn": ["h3"]
-  },
-  "quic": {
-    "initStreamReceiveWindow": 26843545,
-    "maxStreamReceiveWindow": 26843545,
-    "initConnReceiveWindow": 67108864,
-    "maxConnReceiveWindow": 67108864
-  },
-  "bandwidth": {
-    "up": "${up_bw} mbps",
-    "down": "${down_bw} mbps"
-  },
-  "http": {
-    "listen": "0.0.0.0:$server_port",
-    "username": "$proxy_username",
-    "password": "$proxy_password",
-    "realm": "$http_realm"
-  },
-  "socks5": {
-    "listen": "0.0.0.0:$server_port",
-    "username": "$proxy_username",
-    "password": "$proxy_password"
-  }
-}
-EOF
-    elif [[ "$deploy_mode" == "2" ]]; then
+    if [[ "$deploy_mode" == "2" ]]; then
         # 双端不同机模式：生成客户端配置文件
         local client_cfg="/root/${domain}_${server_port}.json"
         cat >"$client_cfg" <<EOF
@@ -1662,7 +1517,7 @@ EOF
 
     echo -e "${GREEN}实例已创建并启动。${NC}"
     echo "服务端配置文件: $config_file"
-    if [[ "$deploy_mode" == "1" ]] || [[ "$deploy_mode" == "2" ]]; then
+    if [[ "$deploy_mode" == "2" ]]; then
         echo "客户端配置文件: $client_cfg"
     fi
     echo "服务器IP: $domain"
@@ -1671,10 +1526,9 @@ EOF
     
     # 根据部署模式显示信息
     if [[ "$deploy_mode" == "1" ]]; then
-        echo -e "${YELLOW}双端同机模式 - 服务端转发到代理出口，客户端提供HTTP/SOCKS5代理：${NC}"
-        echo -e "${YELLOW}  服务端监听: 127.0.0.1:$server_port (转发到代理出口)${NC}"
-        echo -e "${YELLOW}  客户端HTTP代理: 0.0.0.0:$server_port${NC}"
-        echo -e "${YELLOW}  客户端SOCKS5代理: 0.0.0.0:$server_port${NC}"
+        echo -e "${YELLOW}双端同机模式 - 服务端直接提供代理服务：${NC}"
+        echo -e "${YELLOW}  HTTP代理: 127.0.0.1:$server_port${NC}"
+        echo -e "${YELLOW}  SOCKS5代理: 127.0.0.1:$server_port${NC}"
     else
         echo -e "${YELLOW}双端不同机模式 - 服务端信息：${NC}"
         echo -e "${YELLOW}  服务器IP: $domain${NC}"
@@ -1751,8 +1605,19 @@ main_menu() {
     done
 }
 
-# 启动主菜单
 main_menu
+case "$1" in
+    "install")
+        generate_server_config
+        ;;
+    "manage")
+        server_menu
+        ;;
+    *)
+        echo "用法: $0 {install|manage}"
+        exit 1
+        ;;
+esac
 SERVEREOF
     chmod +x /root/hysteria/server.sh
 
@@ -2909,6 +2774,15 @@ esac
 CONFIGEOF
     chmod +x /root/hysteria/config.sh
 
+    # 创建启动器命令
+    cat > /usr/local/bin/h2 << 'CMDEOF'
+#!/bin/bash
+cd /root/hysteria
+[ "$EUID" -ne 0 ] && printf "\033[0;31m请使用root权限运行此脚本\033[0m\n" && exit 1
+bash ./main.sh
+CMDEOF
+chmod +x /usr/local/bin/h2
+
     printf "%b所有模块脚本创建完成%b\n" "${GREEN}" "${NC}"
 }
 
@@ -3186,7 +3060,43 @@ EOF
     printf "%bSystemd服务创建完成%b\n" "${GREEN}" "${NC}"
 }
 
-
+# 验证安装
+verify_installation() {
+    printf "%b验证安装...%b\n" "${YELLOW}" "${NC}"
+    
+    # 检查hysteria可执行文件
+    if [ ! -f "/usr/local/bin/hysteria" ] || [ ! -x "/usr/local/bin/hysteria" ]; then
+        printf "%b✗ hysteria可执行文件不存在或无法执行%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    # 检查文件大小
+    if [ ! -s "/usr/local/bin/hysteria" ]; then
+        printf "%b✗ hysteria文件为空%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    # 测试版本命令
+    if ! /usr/local/bin/hysteria version >/dev/null 2>&1; then
+        printf "%b✗ hysteria版本检查失败%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    # 检查脚本文件
+    if [ ! -f "/root/hysteria/main.sh" ] || [ ! -x "/root/hysteria/main.sh" ]; then
+        printf "%b✗ 管理脚本不存在或无法执行%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    # 检查systemd服务
+    if [ ! -f "/etc/systemd/system/hysteria-server.service" ]; then
+        printf "%b✗ systemd服务文件不存在%b\n" "${RED}" "${NC}"
+        return 1
+    fi
+    
+    printf "%b✓ 安装验证通过%b\n" "${GREEN}" "${NC}"
+    return 0
+}
 
 # 主函数
 main() {
