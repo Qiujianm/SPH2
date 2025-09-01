@@ -5,10 +5,15 @@ AUTHOR="Qiujianm"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
 NC='\033[0m'
 
 # 检查root权限
 [ "$EUID" -ne 0 ] && echo -e "${RED}请使用root权限运行此脚本${NC}" && exit 1
+
+# 目录定义
+HYSTERIA_DIR="/etc/hysteria"
+SINGBOX_CONFIG_DIR="/etc/sing-box"
 
 # 打印状态函数
 print_status() {
@@ -27,9 +32,74 @@ print_status() {
     esac
 }
 
-# 创建并赋权所有模块脚本
+# 清理旧安装
+cleanup_old_installation() {
+    print_status "info" "清理旧安装..."
+    
+    # 停止服务
+    systemctl stop hysteria-server@* 2>/dev/null
+    systemctl stop hysteriaclient@* 2>/dev/null
+    systemctl stop sing-box.service 2>/dev/null
+    
+    # 删除旧文件
+    rm -rf /root/hysteria
+    rm -rf /usr/local/bin/hysteria
+    rm -rf /usr/local/bin/sing-box
+    
+    print_status "info" "清理完成"
+}
+
+# 安装基础依赖
+install_base() {
+    print_status "info" "安装基础依赖..."
+    
+    # 更新包列表
+    apt update
+    
+    # 安装必要工具
+    apt install -y curl wget openssl systemd-sysv
+    
+    # 创建必要目录
+    mkdir -p "$HYSTERIA_DIR"
+    mkdir -p "$SINGBOX_CONFIG_DIR"
+    
+    print_status "info" "基础依赖安装完成"
+}
+
+# 安装 Hysteria2
+install_hysteria() {
+    print_status "info" "安装 Hysteria2..."
+    
+    # 下载最新版本
+    local latest_version=$(curl -s https://api.github.com/repos/apernet/hysteria/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    
+    if [ -z "$latest_version" ]; then
+        print_status "error" "无法获取最新版本号"
+        return 1
+    fi
+    
+    # 下载并安装
+    local arch=$(uname -m)
+    case $arch in
+        x86_64) arch="amd64" ;;
+        aarch64) arch="arm64" ;;
+        *) print_status "error" "不支持的架构: $arch"; return 1 ;;
+    esac
+    
+    local download_url="https://github.com/apernet/hysteria/releases/download/${latest_version}/hysteria-linux-${arch}"
+    
+    if curl -L -o /usr/local/bin/hysteria "$download_url"; then
+        chmod +x /usr/local/bin/hysteria
+        print_status "info" "Hysteria2 安装完成: $latest_version"
+    else
+        print_status "error" "Hysteria2 下载失败"
+        return 1
+    fi
+}
+
+# 创建所有模块脚本
 create_all_scripts() {
-    print_status "info" "创建所有模块脚本...\n"
+    print_status "info" "创建所有模块脚本..."
     
     # 创建目录
     mkdir -p /root/hysteria
@@ -60,7 +130,7 @@ main_menu() {
         echo "5. 检查更新"
         echo "6. 运行状态"
         echo "7. 完全卸载"
-        echo "8. Sing-box 集成管理"  # 新增选项
+        echo "8. Sing-box 集成管理"
         echo "0. 退出脚本"
         printf "%b====================================%b\n" "${GREEN}" "${NC}"
         
@@ -84,7 +154,7 @@ main_menu() {
                 read -t 30 -n 1 -s -r -p "按任意键继续..."
                 ;;
             7) bash ./config.sh uninstall ;;
-            8) bash ./singbox.sh ;;  # 新增 sing-box 管理
+            8) bash ./singbox.sh ;;
             0) exit 0 ;;
             *)
                 printf "%b无效选择%b\n" "${RED}" "${NC}"
@@ -99,40 +169,65 @@ main_menu
 MAINEOF
     chmod +x /root/hysteria/main.sh
 
-    # 创建并赋权 server.sh (保留原有功能)
-    # ... 原有的 server.sh 内容保持不变 ...
-
-    # 创建并赋权 client.sh (保留原有功能)
-    # ... 原有的 client.sh 内容保持不变 ...
-
-    # 创建并赋权 config.sh (保留原有功能)
-    # ... 原有的 config.sh 内容保持不变 ...
-
-    # 新增：创建 singbox.sh 脚本
+    # 创建并赋权 singbox.sh
 cat > /root/hysteria/singbox.sh << 'SINGBOXEOF'
 #!/bin/bash
-
-# Sing-box 集成管理脚本
-# 专门为 Hysteria2 服务端设计 sing-box 客户端配置
-
+RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
-RED='\033[0;31m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-HYSTERIA_DIR="/etc/hysteria2"
+# 目录定义
+HYSTERIA_DIR="/etc/hysteria"
 SINGBOX_CONFIG_DIR="/etc/sing-box"
 
 # 检查目录
 check_directories() {
     if [ ! -d "$HYSTERIA_DIR" ]; then
-        echo -e "${RED}错误: Hysteria2 配置目录不存在，请先运行服务端管理${NC}"
+        echo -e "${RED}错误: Hysteria2 目录不存在${NC}"
+        echo -e "${YELLOW}请先运行主安装脚本${NC}"
         return 1
     fi
     
     mkdir -p "$SINGBOX_CONFIG_DIR"
     return 0
+}
+
+# 安装 sing-box
+install_singbox() {
+    echo -e "${YELLOW}安装 Sing-box...${NC}"
+    
+    # 下载最新版本
+    local latest_version=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    
+    if [ -z "$latest_version" ]; then
+        echo -e "${RED}无法获取最新版本号${NC}"
+        return 1
+    fi
+    
+    # 下载并安装
+    local arch=$(uname -m)
+    case $arch in
+        x86_64) arch="amd64" ;;
+        aarch64) arch="arm64" ;;
+        *) echo -e "${RED}不支持的架构: $arch${NC}"; return 1 ;;
+    esac
+    
+    local download_url="https://github.com/SagerNet/sing-box/releases/download/${latest_version}/sing-box-${latest_version#v}-linux-${arch}.tar.gz"
+    
+    if curl -L -o /tmp/sing-box.tar.gz "$download_url"; then
+        cd /tmp
+        tar -xzf sing-box.tar.gz
+        cp sing-box-*/sing-box /usr/local/bin/
+        chmod +x /usr/local/bin/sing-box
+        rm -rf /tmp/sing-box*
+        
+        echo -e "${GREEN}✓ Sing-box 安装完成: $latest_version${NC}"
+    else
+        echo -e "${RED}Sing-box 下载失败${NC}"
+        return 1
+    fi
 }
 
 # 生成 sing-box 配置 (本地回环架构)
@@ -429,42 +524,13 @@ EOF
     echo -e "${GREEN}✓ Hysteria2 服务端配置生成: $config_file${NC}"
 }
 
-# 安装 sing-box
-install_singbox() {
-    echo -e "${YELLOW}安装 Sing-box...${NC}"
-    
-    # 检查是否已安装
-    if command -v sing-box >/dev/null 2>&1; then
-        echo -e "${GREEN}✓ Sing-box 已安装${NC}"
-        return 0
-    fi
-    
-    # 下载 sing-box
-    local version=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep '"tag_name":' | cut -d'"' -f4)
-    local url="https://github.com/SagerNet/sing-box/releases/download/${version}/sing-box-${version#v}-linux-amd64.tar.gz"
-    
-    echo -e "${YELLOW}下载 Sing-box ${version}...${NC}"
-    if wget -O /tmp/sing-box.tar.gz "$url"; then
-        cd /tmp
-        tar -xzf sing-box.tar.gz
-        cp sing-box-*/sing-box /usr/local/bin/
-        chmod +x /usr/local/bin/sing-box
-        
-        echo -e "${GREEN}✓ Sing-box 安装完成${NC}"
-        rm -rf /tmp/sing-box*
-    else
-        echo -e "${RED}✗ Sing-box 下载失败${NC}"
-        return 1
-    fi
-}
-
-# 创建 systemd 服务
+# 创建 sing-box 系统服务
 create_singbox_service() {
-    echo -e "${YELLOW}创建 Sing-box systemd 服务...${NC}"
+    echo -e "${YELLOW}创建 Sing-box 系统服务...${NC}"
     
     cat > /etc/systemd/system/sing-box.service <<EOF
 [Unit]
-Description=Sing-box Client for Hysteria2
+Description=Sing-box Proxy Service
 After=network.target
 
 [Service]
@@ -473,16 +539,14 @@ User=root
 ExecStart=/usr/local/bin/sing-box run -c $SINGBOX_CONFIG_DIR/config.json
 Restart=always
 RestartSec=3
-LimitNOFILE=65536
+LimitNOFILE=65535
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
-    systemctl enable sing-box.service
-    
-    echo -e "${GREEN}✓ Sing-box 服务创建完成${NC}"
+    echo -e "${GREEN}✓ Sing-box 系统服务创建完成${NC}"
 }
 
 # 启动 Sing-box 服务
@@ -491,10 +555,8 @@ start_singbox_service() {
     
     if systemctl start sing-box.service; then
         echo -e "${GREEN}✓ Sing-box 服务启动成功${NC}"
-        systemctl status sing-box.service --no-pager
     else
         echo -e "${RED}✗ Sing-box 服务启动失败${NC}"
-        return 1
     fi
 }
 
@@ -564,6 +626,45 @@ SINGBOXEOF
     chmod +x /root/hysteria/singbox.sh
 
     printf "%b所有模块脚本创建完成%b\n" "${GREEN}" "${NC}"
+}
+
+# 创建系统服务
+create_systemd_service() {
+    print_status "info" "创建系统服务..."
+    
+    # 创建 h2 命令
+    cat > /usr/local/bin/h2 << 'EOF'
+#!/bin/bash
+cd /root/hysteria
+bash main.sh
+EOF
+    chmod +x /usr/local/bin/h2
+    
+    print_status "info" "系统服务创建完成"
+}
+
+# 验证安装
+verify_installation() {
+    print_status "info" "验证安装..."
+    
+    # 检查 Hysteria2
+    if [ -f "/usr/local/bin/hysteria" ]; then
+        local version=$(/usr/local/bin/hysteria version 2>/dev/null | head -1)
+        print_status "info" "Hysteria2 安装成功: $version"
+    else
+        print_status "error" "Hysteria2 安装失败"
+        return 1
+    fi
+    
+    # 检查脚本
+    if [ -f "/root/hysteria/main.sh" ]; then
+        print_status "info" "管理脚本创建成功"
+    else
+        print_status "error" "管理脚本创建失败"
+        return 1
+    fi
+    
+    return 0
 }
 
 # 主函数
