@@ -317,12 +317,20 @@ generate_instances_batch() {
     up_bw=${up_bw:-185}
     down_bw=${down_bw:-185}
 
-    echo -e "${YELLOW}请粘贴所有代理（每行为一组，格式: IP:端口:用户名:密码），输入完毕后Ctrl+D:${NC}"
-    proxies=""
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        [[ -z "$line" ]] && continue
-        proxies+="$line"$'\n'
-    done
+    echo -e "${YELLOW}请输入要创建的实例数量:${NC}"
+    read -p "实例数量: " instance_count
+    if ! [[ "$instance_count" =~ ^[0-9]+$ ]] || [ "$instance_count" -lt 1 ]; then
+        echo -e "${RED}无效的实例数量${NC}"
+        return
+    fi
+
+    # 配置出口IP前缀
+    echo -e "${YELLOW}出口IP配置:${NC}"
+    read -p "请输入IP前缀 (如: 131.103.115): " ip_prefix
+    if [[ -z "$ip_prefix" ]]; then
+        ip_prefix="131.103.115"
+        echo -e "${YELLOW}使用默认IP前缀: $ip_prefix${NC}"
+    fi
 
     # 选择双端部署模式
     echo -e "${YELLOW}双端部署模式选择:${NC}"
@@ -358,7 +366,12 @@ generate_instances_batch() {
     \"password\": \"$proxy_password\""
     fi
 
-    read -p "请输入批量新建实例的起始端口: " start_port
+    echo -e "${YELLOW}端口配置:${NC}"
+    read -p "请输入起始端口: " start_port
+    if ! [[ "$start_port" =~ ^[0-9]+$ ]] || [ "$start_port" -lt 1 ] || [ "$start_port" -gt 65535 ]; then
+        echo -e "${RED}无效的端口号${NC}"
+        return
+    fi
     current_port="$start_port"
 
     local domain=$(curl -s ipinfo.io/ip || curl -s myip.ipip.net | grep -oE "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" || curl -s https://api.ip.sb/ip)
@@ -373,18 +386,20 @@ generate_instances_batch() {
     ports_to_create=()
     configs_to_create=()
     
-    while read -r proxy_raw; do
-        [[ -z "$proxy_raw" ]] && continue
-        while is_port_in_use "$current_port" || [ -f "$CONFIG_DIR/config_${current_port}.yaml" ]; do
+    for ((i=1; i<=instance_count; i++)); do
+        while is_port_in_use "$current_port" || [ -f "$CONFIG_DIR/config_${server_port}.yaml" ]; do
             echo "端口 $current_port 已被占用，尝试下一个端口..."
             current_port=$((current_port + 1))
         done
 
-        IFS=':' read -r proxy_ip proxy_port proxy_user proxy_pass <<< "$proxy_raw"
         server_port="$current_port"
         current_port=$((current_port + 1))
         password=$(openssl rand -base64 16)
-        proxy_url="http://$proxy_user:$proxy_pass@$proxy_ip:$proxy_port"
+        
+        # 为每个端口分配不同的IP
+        ip_suffix=$((2 + (i - 1) % 253))  # 2-254
+        bind_ip="$ip_prefix.$ip_suffix"
+        
         config_file="$CONFIG_DIR/config_${server_port}.yaml"
 
         cat >"$config_file" <<EOF
@@ -413,15 +428,8 @@ bandwidth:
   up: ${up_bw} mbps
   down: ${down_bw} mbps
 
-outbounds:
-  - name: my_proxy
-    type: http
-    http:
-      url: $proxy_url
-
-acl:
-  inline:
-    - my_proxy(all)
+# 绑定出口IP
+bind: $bind_ip
 EOF
 
         # 收集端口和配置文件信息
@@ -468,10 +476,11 @@ EOF
 }
 EOF
         echo -e "\n${GREEN}已生成端口 $server_port 实例，密码：$password"
+        echo "绑定出口IP: $bind_ip"
         echo "服务端配置: $config_file"
         echo "客户端配置: $client_cfg"
         echo "--------------------------------------${NC}"
-    done <<< "$proxies"
+    done
     
     # 询问启动方式
     echo -e "${YELLOW}选择启动方式：${NC}"
@@ -1149,24 +1158,17 @@ generate_instance_auto() {
     \"password\": \"$proxy_password\""
     fi
 
-    read -p "是否为该实例添加代理出口？(y/n): " add_proxy
-
-    local proxy_config=""
-    if [[ "$add_proxy" == "y" ]]; then
-        read -p "请输入代理信息（格式: IP:端口:用户名:密码）: " proxy_raw
-        IFS=':' read -r proxy_ip proxy_port proxy_user proxy_pass <<< "$proxy_raw"
-        proxy_url="http://$proxy_user:$proxy_pass@$proxy_ip:$proxy_port"
-        proxy_config="
-outbounds:
-  - name: my_proxy
-    type: http
-    http:
-      url: $proxy_url
-
-acl:
-  inline:
-    - my_proxy(all)"
+    # 配置出口IP前缀
+    echo -e "${YELLOW}出口IP配置:${NC}"
+    read -p "请输入IP前缀 (如: 131.103.115): " ip_prefix
+    if [[ -z "$ip_prefix" ]]; then
+        ip_prefix="131.103.115"
+        echo -e "${YELLOW}使用默认IP前缀: $ip_prefix${NC}"
     fi
+    
+    # 随机选择一个IP
+    random_num=$((RANDOM % 253 + 2))
+    bind_ip="$ip_prefix.$random_num"
 
     local config_file="$CONFIG_DIR/config_${server_port}.yaml"
     cat >"$config_file" <<EOF
@@ -1194,7 +1196,9 @@ quic:
 bandwidth:
   up: ${up_bw} mbps
   down: ${down_bw} mbps
-$proxy_config
+
+# 绑定出口IP
+bind: $bind_ip
 EOF
 
     # 询问启动方式
@@ -1305,6 +1309,7 @@ EOF
     echo "客户端配置文件: $client_cfg"
     echo "服务器IP: $domain"
     echo "监听端口: $server_port"
+    echo "绑定出口IP: $bind_ip"
     echo "密码: $password"
 }
 
