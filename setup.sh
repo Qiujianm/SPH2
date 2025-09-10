@@ -607,7 +607,8 @@ generate_instances_batch() {
     echo "1. 每个实例使用不同IP（传统模式）"
     echo "2. 使用多用户多IP系统（基于用户分配IP）"
     echo "3. 所有实例使用相同IP"
-    read -p "请选择IP模式 [1-3]: " ip_mode
+    echo "4. 远端多代理出口模式（每个实例转发到不同远端代理）"
+    read -p "请选择IP模式 [1-4]: " ip_mode
     
     case "$ip_mode" in
         1)
@@ -670,6 +671,33 @@ generate_instances_batch() {
             
             # 配置IP绑定
             configure_ip_binding "$start_ip"
+            ;;
+        4)
+            # 远端多代理出口模式
+            echo -e "${YELLOW}远端多代理出口模式配置:${NC}"
+            echo "请输入远端代理列表，格式：host:port:username:password"
+            echo "每行一个代理，支持多行输入，输入完成后按Ctrl+D结束"
+            echo "示例："
+            echo "isp.decodo.com:10123:spsyn0femf:Ilzkn_Ib8Wgf167bSs"
+            echo "isp.decodo.com:10124:spsyn0femf:Ilzkn_Ib8Wgf167bSs"
+            echo ""
+            
+            # 读取多行代理配置
+            proxy_list=()
+            while IFS= read -r line; do
+                if [[ -n "$line" && "$line" =~ ^[^:]+:[0-9]+:[^:]+:[^:]+$ ]]; then
+                    proxy_list+=("$line")
+                elif [[ -n "$line" ]]; then
+                    echo -e "${RED}无效格式: $line，跳过${NC}"
+                fi
+            done
+            
+            if [ ${#proxy_list[@]} -eq 0 ]; then
+                echo -e "${RED}未输入有效的代理配置${NC}"
+                return 1
+            fi
+            
+            echo -e "${GREEN}已读取 ${#proxy_list[@]} 个远端代理配置${NC}"
             ;;
         *)
             echo -e "${RED}无效选择，使用默认模式${NC}"
@@ -868,6 +896,32 @@ masquerade:
                 bind_ip="$start_ip"
                 # 统一IP模式使用root用户
                 users_to_create+=("")
+                ;;
+            4)
+                # 远端多代理出口模式
+                if [ ${#proxy_list[@]} -eq 0 ]; then
+                    echo -e "${RED}未配置远端代理列表${NC}"
+                    return 1
+                fi
+                
+                # 循环使用代理列表
+                local proxy_index=$(( (i - 1) % ${#proxy_list[@]} ))
+                local proxy_info="${proxy_list[$proxy_index]}"
+                local proxy_host=$(echo "$proxy_info" | cut -d':' -f1)
+                local proxy_port=$(echo "$proxy_info" | cut -d':' -f2)
+                local proxy_username=$(echo "$proxy_info" | cut -d':' -f3)
+                local proxy_password=$(echo "$proxy_info" | cut -d':' -f4)
+                
+                # 设置转发到远端代理
+                masquerade_config="
+masquerade:
+  proxy:
+    url: http://$proxy_username:$proxy_password@$proxy_host:$proxy_port
+    rewriteHost: false"
+                
+                bind_ip="131.103.115.2"  # 使用主IP
+                users_to_create+=("")
+                echo -e "${YELLOW}实例 $i 使用远端代理: $proxy_host:$proxy_port${NC}"
                 ;;
         esac
         
