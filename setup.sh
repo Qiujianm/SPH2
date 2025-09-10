@@ -3366,7 +3366,7 @@ install_base() {
             fi
             
             printf "%b安装基础工具...%b\n" "${YELLOW}" "${NC}"
-            if timeout 300 apt install -y curl wget openssl net-tools 2>/dev/null; then
+            if timeout 300 apt install -y curl wget openssl net-tools iptables iptables-persistent 2>/dev/null; then
                 printf "%b✓ 基础依赖安装成功%b\n" "${GREEN}" "${NC}"
             else
                 printf "%b⚠ 部分依赖安装失败，尝试继续%b\n" "${YELLOW}" "${NC}"
@@ -3374,15 +3374,17 @@ install_base() {
             ;;
         "redhat")
             printf "%b安装基础工具...%b\n" "${YELLOW}" "${NC}"
-            if timeout 300 yum install -y curl wget openssl net-tools 2>/dev/null; then
+            if timeout 300 yum install -y curl wget openssl net-tools iptables iptables-services 2>/dev/null; then
                 printf "%b✓ 基础依赖安装成功%b\n" "${GREEN}" "${NC}"
+                # 启用iptables服务
+                systemctl enable iptables 2>/dev/null || true
             else
                 printf "%b⚠ 部分依赖安装失败，尝试继续%b\n" "${YELLOW}" "${NC}"
             fi
             ;;
         "arch")
             printf "%b安装基础工具...%b\n" "${YELLOW}" "${NC}"
-            if timeout 300 pacman -S --noconfirm curl wget openssl net-tools 2>/dev/null; then
+            if timeout 300 pacman -S --noconfirm curl wget openssl net-tools iptables 2>/dev/null; then
                 printf "%b✓ 基础依赖安装成功%b\n" "${GREEN}" "${NC}"
             else
                 printf "%b⚠ 部分依赖安装失败，尝试继续%b\n" "${YELLOW}" "${NC}"
@@ -3392,7 +3394,7 @@ install_base() {
             printf "%b尝试通用安装方法...%b\n" "${YELLOW}" "${NC}"
             # 尝试使用which检查工具是否已安装
             local missing_tools=""
-            for tool in curl wget openssl; do
+            for tool in curl wget openssl iptables; do
                 if ! command -v "$tool" >/dev/null 2>&1; then
                     missing_tools="$missing_tools $tool"
                 fi
