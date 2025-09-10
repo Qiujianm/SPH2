@@ -5,6 +5,7 @@ AUTHOR="Qiujianm"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
 NC='\033[0m'
 
 # 检查root权限
@@ -727,69 +728,80 @@ generate_instances_batch() {
             ;;
     esac
     
-    # 配置服务端代理转发
-    echo -e "${YELLOW}服务端代理转发配置:${NC}"
-    echo "1. 直连模式（不转发，直接访问目标）"
-    echo "2. 转发到指定网站（伪装模式）"
-    echo "3. 转发到远程代理服务器"
-    echo "4. 自定义转发配置"
-    read -p "请选择转发模式 [1-4]: " proxy_mode
-    
-    case "$proxy_mode" in
-        1)
-            # 直连模式
-            masquerade_config=""
-            echo -e "${YELLOW}使用直连模式${NC}"
-            ;;
-        2)
-            # 伪装模式
-            echo -e "${YELLOW}伪装模式配置:${NC}"
-            read -p "请输入伪装网站URL [https://www.bing.com]: " masquerade_url
-            masquerade_url=${masquerade_url:-https://www.bing.com}
-            masquerade_config="
+    # 根据IP模式选择转发配置
+    if [[ "$ip_mode" == "4" ]]; then
+        # 远端多代理出口模式：使用默认转发配置
+        echo -e "${YELLOW}远端多代理出口模式：使用默认转发配置${NC}"
+        masquerade_config="
+masquerade:
+  proxy:
+    url: https://www.bing.com
+    rewriteHost: true"
+    else
+        # 其他模式：询问用户选择转发配置
+        echo -e "${YELLOW}服务端代理转发配置:${NC}"
+        echo "1. 直连模式（不转发，直接访问目标）"
+        echo "2. 转发到指定网站（伪装模式）"
+        echo "3. 转发到远程代理服务器"
+        echo "4. 自定义转发配置"
+        read -p "请选择转发模式 [1-4]: " proxy_mode
+        
+        case "$proxy_mode" in
+            1)
+                # 直连模式
+                masquerade_config=""
+                echo -e "${YELLOW}使用直连模式${NC}"
+                ;;
+            2)
+                # 伪装模式
+                echo -e "${YELLOW}伪装模式配置:${NC}"
+                read -p "请输入伪装网站URL [https://www.bing.com]: " masquerade_url
+                masquerade_url=${masquerade_url:-https://www.bing.com}
+                masquerade_config="
 masquerade:
   proxy:
     url: $masquerade_url
     rewriteHost: true"
-            echo -e "${YELLOW}使用伪装模式，目标: $masquerade_url${NC}"
-            ;;
-        3)
-            # 转发到远程代理
-            echo -e "${YELLOW}远程代理配置:${NC}"
-            read -p "请输入远程代理服务器地址 (如: 127.0.0.1:8080): " remote_proxy
-            if [[ -z "$remote_proxy" ]]; then
-                echo -e "${RED}远程代理地址不能为空${NC}"
-                return 1
-            fi
-            masquerade_config="
+                echo -e "${YELLOW}使用伪装模式，目标: $masquerade_url${NC}"
+                ;;
+            3)
+                # 转发到远程代理
+                echo -e "${YELLOW}远程代理配置:${NC}"
+                read -p "请输入远程代理服务器地址 (如: 127.0.0.1:8080): " remote_proxy
+                if [[ -z "$remote_proxy" ]]; then
+                    echo -e "${RED}远程代理地址不能为空${NC}"
+                    return 1
+                fi
+                masquerade_config="
 masquerade:
   proxy:
     url: http://$remote_proxy
     rewriteHost: false"
-            echo -e "${YELLOW}使用远程代理模式，目标: $remote_proxy${NC}"
-            ;;
-        4)
-            # 自定义配置
-            echo -e "${YELLOW}自定义转发配置:${NC}"
-            read -p "请输入转发URL: " custom_url
-            read -p "是否重写Host头 [y/N]: " rewrite_host
-            if [[ "$rewrite_host" == [yY] ]]; then
-                rewrite_host="true"
-            else
-                rewrite_host="false"
-            fi
-            masquerade_config="
+                echo -e "${YELLOW}使用远程代理模式，目标: $remote_proxy${NC}"
+                ;;
+            4)
+                # 自定义配置
+                echo -e "${YELLOW}自定义转发配置:${NC}"
+                read -p "请输入转发URL: " custom_url
+                read -p "是否重写Host头 [y/N]: " rewrite_host
+                if [[ "$rewrite_host" == [yY] ]]; then
+                    rewrite_host="true"
+                else
+                    rewrite_host="false"
+                fi
+                masquerade_config="
 masquerade:
   proxy:
     url: $custom_url
     rewriteHost: $rewrite_host"
-            echo -e "${YELLOW}使用自定义转发模式，目标: $custom_url${NC}"
-            ;;
-        *)
-            echo -e "${RED}无效选择，使用直连模式${NC}"
-            masquerade_config=""
-            ;;
-    esac
+                echo -e "${YELLOW}使用自定义转发模式，目标: $custom_url${NC}"
+                ;;
+            *)
+                echo -e "${RED}无效选择，使用直连模式${NC}"
+                masquerade_config=""
+                ;;
+        esac
+    fi
     
     # 配置客户端代理认证信息
     echo -e "${YELLOW}客户端代理认证配置（HTTP和SOCKS5使用相同认证信息）:${NC}"
@@ -821,6 +833,7 @@ masquerade:
     ports_to_create=()
     configs_to_create=()
     users_to_create=()  # 新增：存储用户名
+    outbounds_config=""  # 初始化outbounds配置
     
     for ((i=1; i<=instance_count; i++)); do
         while is_port_in_use "$current_port" || [ -f "$CONFIG_DIR/config_${current_port}.yaml" ]; do
@@ -909,15 +922,27 @@ masquerade:
                 local proxy_info="${proxy_list[$proxy_index]}"
                 local proxy_host=$(echo "$proxy_info" | cut -d':' -f1)
                 local proxy_port=$(echo "$proxy_info" | cut -d':' -f2)
-                local proxy_username=$(echo "$proxy_info" | cut -d':' -f3)
-                local proxy_password=$(echo "$proxy_info" | cut -d':' -f4)
+                local remote_proxy_username=$(echo "$proxy_info" | cut -d':' -f3)
+                local remote_proxy_password=$(echo "$proxy_info" | cut -d':' -f4)
                 
                 # 设置转发到远端代理
                 masquerade_config="
 masquerade:
   proxy:
-    url: http://$proxy_username:$proxy_password@$proxy_host:$proxy_port
-    rewriteHost: false"
+    url: https://www.bing.com
+    rewriteHost: true"
+                
+                # 为远端代理模式生成outbounds配置
+                outbounds_config="
+outbounds:
+  - name: my_proxy
+    type: http
+    http:
+      url: http://$remote_proxy_username:$remote_proxy_password@$proxy_host:$proxy_port
+
+acl:
+  inline:
+    - my_proxy(all)"
                 
                 bind_ip="131.103.115.2"  # 使用主IP
                 users_to_create+=("")
@@ -948,22 +973,7 @@ quic:
 bandwidth:
   up: ${up_bw} mbps
   down: ${down_bw} mbps
-
-# 绑定出口IP
-bind: $bind_ip
-
-# HTTP代理服务
-http:
-  listen: 0.0.0.0:$server_port
-  username: $proxy_username
-  password: $proxy_password
-  realm: $http_realm
-
-# SOCKS5代理服务
-socks5:
-  listen: 0.0.0.0:$server_port
-  username: $proxy_username
-  password: $proxy_password
+$outbounds_config
 EOF
 
         # 收集端口和配置文件信息
@@ -999,13 +1009,13 @@ EOF
     "down": "${down_bw} mbps"
   },
   "http": {
-    "listen": "0.0.0.0:$server_port",
+    "listen": "0.0.0.0:$((server_port))",
     "username": "$proxy_username",
     "password": "$proxy_password",
     "realm": "$http_realm"
   },
   "socks5": {
-    "listen": "0.0.0.0:$server_port",
+    "listen": "0.0.0.0:$((server_port))",
     "username": "$proxy_username",
     "password": "$proxy_password"
   }
@@ -1924,13 +1934,13 @@ EOF
     "down": "${down_bw} mbps"
   },
   "http": {
-    "listen": "0.0.0.0:$server_port",
+    "listen": "0.0.0.0:$((server_port))",
     "username": "$proxy_username",
     "password": "$proxy_password",
     "realm": "$http_realm"
   },
   "socks5": {
-    "listen": "0.0.0.0:$server_port",
+    "listen": "0.0.0.0:$((server_port))",
     "username": "$proxy_username",
     "password": "$proxy_password"
   }
