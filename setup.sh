@@ -3641,7 +3641,9 @@ install_base() {
             fi
             
             printf "%b安装基础工具...%b\n" "${YELLOW}" "${NC}"
-            if timeout 300 apt install -y curl wget openssl net-tools iptables iptables-persistent 2>/dev/null; then
+            if echo "iptables-persistent iptables-persistent/autosave_v4 boolean true" | debconf-set-selections && \
+               echo "iptables-persistent iptables-persistent/autosave_v6 boolean true" | debconf-set-selections && \
+               timeout 300 apt install -y curl wget openssl net-tools iptables iptables-persistent 2>/dev/null; then
                 printf "%b✓ 基础依赖安装成功%b\n" "${GREEN}" "${NC}"
             else
                 printf "%b⚠ 部分依赖安装失败，尝试继续%b\n" "${YELLOW}" "${NC}"
