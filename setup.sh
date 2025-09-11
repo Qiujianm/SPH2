@@ -2581,61 +2581,143 @@ start_remaining_instances() {
     # 检查是否有配置文件
     if ! ls /root/*.json 2>/dev/null | grep -q .; then
         echo -e "${YELLOW}当前没有客户端配置文件${NC}"
+        echo -e "${YELLOW}请先使用服务端管理创建客户端配置文件${NC}"
         return
     fi
     
-    # 询问是否创建系统服务
-    echo -e "${YELLOW}是否创建系统服务？${NC}"
+    # 询问启动方式
+    echo -e "${YELLOW}选择启动方式：${NC}"
     echo "1. 创建系统服务（开机自启动，但速度较慢）"
     echo "2. 直接启动进程（速度快，但重启后需要手动启动）"
-    read -p "请选择 [1-2]: " create_service
+    echo "3. 超快速启动模式（大量实例专用，并行启动）"
+    read -p "请选择 [1-3]: " create_service
     
     shopt -s nullglob
     found=0
     
-    if [[ "$create_service" == "1" ]]; then
-        # 系统服务模式
-        for cfg in /root/*.json; do
-            [ -f "$cfg" ] || continue
-            name=$(basename "${cfg%.json}")
-            if ! systemctl is-active --quiet hysteriaclient@"$name"; then
-                if systemctl enable --now hysteriaclient@"$name" &>/dev/null; then
-                    echo -e "${GREEN}✓ 已启动新增实例：$name${NC}"
-                else
-                    echo -e "${RED}✗ 启动实例 $name 失败${NC}"
-                    systemctl status hysteriaclient@"$name" --no-pager
+    case "$create_service" in
+        1)
+            # 系统服务模式
+            for cfg in /root/*.json; do
+                [ -f "$cfg" ] || continue
+                name=$(basename "${cfg%.json}")
+                if ! systemctl is-active --quiet hysteriaclient@"$name"; then
+                    if systemctl enable --now hysteriaclient@"$name" &>/dev/null; then
+                        echo -e "${GREEN}✓ 已启动新增实例：$name${NC}"
+                    else
+                        echo -e "${RED}✗ 启动实例 $name 失败${NC}"
+                        systemctl status hysteriaclient@"$name" --no-pager
+                    fi
+                    found=1
+                fi
+            done
+            ;;
+        2)
+            # 直接进程模式（并行优化）
+            echo -e "${YELLOW}正在直接启动hysteria客户端进程...${NC}"
+            local started_count=0
+            local failed_count=0
+            local skipped_count=0
+            
+            for cfg in /root/*.json; do
+                [ -f "$cfg" ] || continue
+                name=$(basename "${cfg%.json}")
+                
+                # 检查是否已有进程在运行
+                if pgrep -f "hysteria.*client.*-c.*$cfg" >/dev/null; then
+                    echo -e "${YELLOW}客户端 $name 的进程已在运行，跳过${NC}"
+                    ((skipped_count++))
+                    continue
+                fi
+                
+                # 后台启动hysteria客户端进程
+                (
+                    nohup /usr/local/bin/hysteria client -c "$cfg" >/dev/null 2>&1 &
+                    local pid=$!
+                    
+                    # 短暂等待确保进程启动
+                    sleep 0.1
+                    
+                    # 检查进程是否成功启动
+                    if kill -0 "$pid" 2>/dev/null; then
+                        echo -e "${GREEN}✓ 已启动新增实例：$name (PID: $pid)${NC}"
+                        ((started_count++))
+                    else
+                        echo -e "${RED}✗ 启动失败：$name${NC}"
+                        ((failed_count++))
+                    fi
+                ) &
+                
+                # 控制并发数量
+                if (( $(jobs -r | wc -l) >= 20 )); then
+                    wait -n
                 fi
                 found=1
-            fi
-        done
+            done
+            
+            # 等待所有后台任务完成
+            wait
+            
+            echo -e "${GREEN}批量启动完成：成功 $started_count 个，失败 $failed_count 个，跳过 $skipped_count 个${NC}"
+            ;;
+        3)
+            # 超快速启动模式（大量实例专用）
+            echo -e "${YELLOW}超快速启动模式（大量实例专用）...${NC}"
+            local started_count=0
+            local failed_count=0
+            
+            # 创建快速启动脚本
+            local fast_start_script="/tmp/hysteria_client_fast_start_$$.sh"
+            cat > "$fast_start_script" << EOF
+#!/bin/bash
+# 超快速启动脚本
+
+CONFIG_DIR="/root"
+HYSTERIA_BIN="/usr/local/bin/hysteria"
+
+# 并行启动所有实例
+for cfg in /root/*.json; do
+    [ -f "\$cfg" ] || continue
+    name=\$(basename "\${cfg%.json}")
+    
+    # 检查是否已有进程在运行
+    if ! pgrep -f "hysteria.*client.*-c.*\$cfg" >/dev/null; then
+        # 后台启动hysteria客户端进程（无延迟）
+        nohup \$HYSTERIA_BIN client -c "\$cfg" >/dev/null 2>&1 &
+        echo -e "\033[32m✓ 已启动新增实例：\$name\033[0m"
+        ((started_count++))
     else
-        # 直接进程模式
-        for cfg in /root/*.json; do
-            [ -f "$cfg" ] || continue
-            name=$(basename "${cfg%.json}")
-            
-            # 检查是否已有进程在运行
-            if pgrep -f "hysteria.*client.*-c.*$cfg" >/dev/null; then
-                echo -e "${YELLOW}客户端 $name 的进程已在运行，跳过${NC}"
-                continue
-            fi
-            
-            # 后台启动hysteria客户端进程
-            nohup /usr/local/bin/hysteria client -c "$cfg" >/dev/null 2>&1 &
-            local pid=$!
-            
-            # 等待一下确保进程启动
-            sleep 0.5
-            
-            # 检查进程是否成功启动
-            if kill -0 "$pid" 2>/dev/null; then
-                echo -e "${GREEN}✓ 客户端 $name 进程启动成功 (PID: $pid)${NC}"
-            else
-                echo -e "${RED}✗ 客户端 $name 进程启动失败${NC}"
-            fi
-            found=1
-        done
+        echo -e "\033[33m⚠ 实例 \$name 已在运行\033[0m"
     fi
+    
+    # 控制并发数量，避免系统负载过高
+    if (( \$(jobs -r | wc -l) >= 50 )); then
+        wait -n
+    fi
+done
+
+# 等待所有后台任务完成
+wait
+echo -e "\033[32m超快速启动完成：成功 \$started_count 个实例\033[0m"
+EOF
+            
+            chmod +x "$fast_start_script"
+            
+            # 执行快速启动脚本
+            echo -e "${YELLOW}正在执行超快速启动...${NC}"
+            bash "$fast_start_script"
+            
+            # 清理临时脚本
+            rm -f "$fast_start_script"
+            
+            echo -e "${GREEN}✓ 超快速启动模式完成${NC}"
+            found=1
+            ;;
+        *)
+            echo -e "${RED}无效选择${NC}"
+            return
+            ;;
+    esac
     
     if [ $found -eq 0 ]; then
         echo -e "${YELLOW}没有剩余未启动的实例${NC}"
@@ -4517,8 +4599,15 @@ After=network.target
 [Service]
 ExecStart=/usr/local/bin/hysteria server -c /etc/hysteria/config.yaml
 Restart=always
-RestartSec=3
+RestartSec=1
 User=root
+Nice=-5
+IOSchedulingClass=1
+IOSchedulingPriority=4
+CPUSchedulingPolicy=rr
+CPUSchedulingPriority=50
+TimeoutStartSec=10
+TimeoutStopSec=5
 
 [Install]
 WantedBy=multi-user.target
