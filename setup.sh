@@ -61,11 +61,12 @@ main_menu() {
         echo "5. 检查更新"
         echo "6. 运行状态"
         echo "7. 白名单IP流量控制"
-        echo "8. 完全卸载"
+        echo "8. 自动防护管理"
+        echo "9. 完全卸载"
         echo "0. 退出脚本"
         printf "%b====================================%b\n" "${GREEN}" "${NC}"
         
-        read -t 60 -p "请选择 [0-8]: " choice || {
+        read -t 60 -p "请选择 [0-9]: " choice || {
             printf "\n%b操作超时，退出脚本%b\n" "${YELLOW}" "${NC}"
             exit 1
         }
@@ -115,7 +116,8 @@ main_menu() {
                 read -t 30 -n 1 -s -r -p "按任意键继续..."
                 ;;
             7) bash ./config.sh whitelist ;;
-            8) bash ./config.sh uninstall ;;
+            8) protection_management ;;
+            9) bash ./config.sh uninstall ;;
             0) exit 0 ;;
             *)
                 printf "%b无效选择%b\n" "${RED}" "${NC}"
@@ -3330,6 +3332,395 @@ update() {
     
     systemctl restart hysteria-server
     sleep 2
+}
+
+# 自动防护管理
+protection_management() {
+    while true; do
+        clear
+        printf "%b═══════ 自动防护管理 ═══════%b\n" "${GREEN}" "${NC}"
+        echo "1. 自动IP阻止管理"
+        echo "2. 连接频率限制管理"
+        echo "3. 异常流量检测管理"
+        echo "4. 自动清理规则管理"
+        echo "5. 查看所有防护规则状态"
+        echo "6. 一键启用所有防护"
+        echo "7. 一键禁用所有防护"
+        echo "0. 返回主菜单"
+        printf "%b====================================%b\n" "${GREEN}" "${NC}"
+        
+        read -t 60 -p "请选择 [0-7]: " choice || {
+            printf "\n%b操作超时，返回主菜单%b\n" "${YELLOW}" "${NC}"
+            return
+        }
+        
+        case $choice in
+            1) manage_auto_ip_block ;;
+            2) manage_connection_rate_limit ;;
+            3) manage_anomaly_detection ;;
+            4) manage_auto_cleanup ;;
+            5) show_protection_rules_status ;;
+            6) enable_all_protections ;;
+            7) disable_all_protections ;;
+            0) return ;;
+            *)
+                printf "%b无效选择%b\n" "${RED}" "${NC}"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# 管理自动IP阻止
+manage_auto_ip_block() {
+    echo -e "${YELLOW}自动IP阻止管理${NC}"
+    echo "----------------------------------------"
+    
+    # 检查是否已启用
+    if iptables -L INPUT | grep -q "AUTO_BLOCK"; then
+        echo -e "${GREEN}当前状态: 已启用${NC}"
+        echo "1. 禁用自动IP阻止"
+        echo "2. 重新配置规则"
+        read -p "请选择 [1-2]: " choice
+        
+        case $choice in
+            1)
+                echo "正在禁用自动IP阻止..."
+                iptables -D INPUT -m recent --update --seconds 300 --hitcount 10 --name AUTO_BLOCK -j DROP 2>/dev/null || true
+                iptables -D INPUT -m recent --set --name AUTO_BLOCK 2>/dev/null || true
+                echo -e "${GREEN}✓ 自动IP阻止已禁用${NC}"
+                ;;
+            2)
+                echo "重新配置自动IP阻止规则..."
+                iptables -D INPUT -m recent --update --seconds 300 --hitcount 10 --name AUTO_BLOCK -j DROP 2>/dev/null || true
+                iptables -D INPUT -m recent --set --name AUTO_BLOCK 2>/dev/null || true
+                read -p "请输入阻止时间(秒) [默认: 300]: " block_time
+                read -p "请输入触发次数 [默认: 10]: " hit_count
+                block_time=${block_time:-300}
+                hit_count=${hit_count:-10}
+                iptables -A INPUT -m recent --set --name AUTO_BLOCK
+                iptables -A INPUT -m recent --update --seconds $block_time --hitcount $hit_count --name AUTO_BLOCK -j DROP
+                echo -e "${GREEN}✓ 自动IP阻止已重新配置 (${hit_count}次/${block_time}秒)${NC}"
+                ;;
+        esac
+    else
+        echo -e "${RED}当前状态: 未启用${NC}"
+        echo "1. 启用自动IP阻止"
+        read -p "请选择 [1]: " choice
+        
+        if [ "$choice" = "1" ]; then
+            read -p "请输入阻止时间(秒) [默认: 300]: " block_time
+            read -p "请输入触发次数 [默认: 10]: " hit_count
+            block_time=${block_time:-300}
+            hit_count=${hit_count:-10}
+            iptables -A INPUT -m recent --set --name AUTO_BLOCK
+            iptables -A INPUT -m recent --update --seconds $block_time --hitcount $hit_count --name AUTO_BLOCK -j DROP
+            echo -e "${GREEN}✓ 自动IP阻止已启用 (${hit_count}次/${block_time}秒)${NC}"
+        fi
+    fi
+    
+    # 保存iptables规则
+    save_iptables_rules
+    read -p "按回车键继续..."
+}
+
+# 管理连接频率限制
+manage_connection_rate_limit() {
+    echo -e "${YELLOW}连接频率限制管理${NC}"
+    echo "----------------------------------------"
+    
+    # 检查是否已启用
+    if iptables -L INPUT | grep -q "limit.*min"; then
+        echo -e "${GREEN}当前状态: 已启用${NC}"
+        echo "1. 禁用连接频率限制"
+        echo "2. 重新配置限制"
+        read -p "请选择 [1-2]: " choice
+        
+        case $choice in
+            1)
+                echo "正在禁用连接频率限制..."
+                iptables -D INPUT -j DROP 2>/dev/null || true
+                iptables -D INPUT -m limit --limit 60/min -j ACCEPT 2>/dev/null || true
+                echo -e "${GREEN}✓ 连接频率限制已禁用${NC}"
+                ;;
+            2)
+                echo "重新配置连接频率限制..."
+                iptables -D INPUT -j DROP 2>/dev/null || true
+                iptables -D INPUT -m limit --limit 60/min -j ACCEPT 2>/dev/null || true
+                read -p "请输入每分钟最大连接数 [默认: 60]: " max_conn
+                max_conn=${max_conn:-60}
+                iptables -A INPUT -m limit --limit $max_conn/min -j ACCEPT
+                iptables -A INPUT -j DROP
+                echo -e "${GREEN}✓ 连接频率限制已重新配置 (${max_conn}/分钟)${NC}"
+                ;;
+        esac
+    else
+        echo -e "${RED}当前状态: 未启用${NC}"
+        echo "1. 启用连接频率限制"
+        read -p "请选择 [1]: " choice
+        
+        if [ "$choice" = "1" ]; then
+            read -p "请输入每分钟最大连接数 [默认: 60]: " max_conn
+            max_conn=${max_conn:-60}
+            iptables -A INPUT -m limit --limit $max_conn/min -j ACCEPT
+            iptables -A INPUT -j DROP
+            echo -e "${GREEN}✓ 连接频率限制已启用 (${max_conn}/分钟)${NC}"
+        fi
+    fi
+    
+    # 保存iptables规则
+    save_iptables_rules
+    read -p "按回车键继续..."
+}
+
+# 管理异常流量检测
+manage_anomaly_detection() {
+    echo -e "${YELLOW}异常流量检测管理${NC}"
+    echo "----------------------------------------"
+    
+    # 检查是否已启用
+    if iptables -L INPUT | grep -q "NEW_CONN"; then
+        echo -e "${GREEN}当前状态: 已启用${NC}"
+        echo "1. 禁用异常流量检测"
+        echo "2. 重新配置检测规则"
+        read -p "请选择 [1-2]: " choice
+        
+        case $choice in
+            1)
+                echo "正在禁用异常流量检测..."
+                iptables -D INPUT -m state --state NEW -m recent --update --seconds 60 --hitcount 20 --name NEW_CONN -j DROP 2>/dev/null || true
+                iptables -D INPUT -m state --state NEW -m recent --set --name NEW_CONN 2>/dev/null || true
+                echo -e "${GREEN}✓ 异常流量检测已禁用${NC}"
+                ;;
+            2)
+                echo "重新配置异常流量检测..."
+                iptables -D INPUT -m state --state NEW -m recent --update --seconds 60 --hitcount 20 --name NEW_CONN -j DROP 2>/dev/null || true
+                iptables -D INPUT -m state --state NEW -m recent --set --name NEW_CONN 2>/dev/null || true
+                read -p "请输入检测时间窗口(秒) [默认: 60]: " time_window
+                read -p "请输入触发次数 [默认: 20]: " hit_count
+                time_window=${time_window:-60}
+                hit_count=${hit_count:-20}
+                iptables -A INPUT -m state --state NEW -m recent --set --name NEW_CONN
+                iptables -A INPUT -m state --state NEW -m recent --update --seconds $time_window --hitcount $hit_count --name NEW_CONN -j DROP
+                echo -e "${GREEN}✓ 异常流量检测已重新配置 (${hit_count}次/${time_window}秒)${NC}"
+                ;;
+        esac
+    else
+        echo -e "${RED}当前状态: 未启用${NC}"
+        echo "1. 启用异常流量检测"
+        read -p "请选择 [1]: " choice
+        
+        if [ "$choice" = "1" ]; then
+            read -p "请输入检测时间窗口(秒) [默认: 60]: " time_window
+            read -p "请输入触发次数 [默认: 20]: " hit_count
+            time_window=${time_window:-60}
+            hit_count=${hit_count:-20}
+            iptables -A INPUT -m state --state NEW -m recent --set --name NEW_CONN
+            iptables -A INPUT -m state --state NEW -m recent --update --seconds $time_window --hitcount $hit_count --name NEW_CONN -j DROP
+            echo -e "${GREEN}✓ 异常流量检测已启用 (${hit_count}次/${time_window}秒)${NC}"
+        fi
+    fi
+    
+    # 保存iptables规则
+    save_iptables_rules
+    read -p "按回车键继续..."
+}
+
+# 管理自动清理规则
+manage_auto_cleanup() {
+    echo -e "${YELLOW}自动清理规则管理${NC}"
+    echo "----------------------------------------"
+    
+    # 检查是否已启用
+    if [ -f "/etc/cron.d/hysteria-cleanup" ]; then
+        echo -e "${GREEN}当前状态: 已启用${NC}"
+        echo "1. 禁用自动清理规则"
+        echo "2. 重新配置清理规则"
+        read -p "请选择 [1-2]: " choice
+        
+        case $choice in
+            1)
+                echo "正在禁用自动清理规则..."
+                rm -f /etc/cron.d/hysteria-cleanup
+                echo -e "${GREEN}✓ 自动清理规则已禁用${NC}"
+                ;;
+            2)
+                echo "重新配置自动清理规则..."
+                rm -f /etc/cron.d/hysteria-cleanup
+                read -p "请输入清理间隔(分钟) [默认: 60]: " interval
+                interval=${interval:-60}
+                cat > /etc/cron.d/hysteria-cleanup << EOF
+# 每${interval}分钟清理一次无效连接
+*/${interval} * * * * root /usr/local/bin/hysteria-cleanup.sh
+EOF
+                echo -e "${GREEN}✓ 自动清理规则已重新配置 (每${interval}分钟)${NC}"
+                ;;
+        esac
+    else
+        echo -e "${RED}当前状态: 未启用${NC}"
+        echo "1. 启用自动清理规则"
+        read -p "请选择 [1]: " choice
+        
+        if [ "$choice" = "1" ]; then
+            read -p "请输入清理间隔(分钟) [默认: 60]: " interval
+            interval=${interval:-60}
+            cat > /etc/cron.d/hysteria-cleanup << EOF
+# 每${interval}分钟清理一次无效连接
+*/${interval} * * * * root /usr/local/bin/hysteria-cleanup.sh
+EOF
+            echo -e "${GREEN}✓ 自动清理规则已启用 (每${interval}分钟)${NC}"
+        fi
+    fi
+    
+    read -p "按回车键继续..."
+}
+
+# 查看所有防护规则状态
+show_protection_rules_status() {
+    echo -e "${YELLOW}防护规则状态总览${NC}"
+    echo "=========================================="
+    
+    # 检查自动IP阻止
+    if iptables -L INPUT | grep -q "AUTO_BLOCK"; then
+        echo -e "${GREEN}✓ 自动IP阻止: 已启用${NC}"
+    else
+        echo -e "${RED}✗ 自动IP阻止: 未启用${NC}"
+    fi
+    
+    # 检查连接频率限制
+    if iptables -L INPUT | grep -q "limit.*min"; then
+        echo -e "${GREEN}✓ 连接频率限制: 已启用${NC}"
+    else
+        echo -e "${RED}✗ 连接频率限制: 未启用${NC}"
+    fi
+    
+    # 检查异常流量检测
+    if iptables -L INPUT | grep -q "NEW_CONN"; then
+        echo -e "${GREEN}✓ 异常流量检测: 已启用${NC}"
+    else
+        echo -e "${RED}✗ 异常流量检测: 未启用${NC}"
+    fi
+    
+    # 检查自动清理规则
+    if [ -f "/etc/cron.d/hysteria-cleanup" ]; then
+        echo -e "${GREEN}✓ 自动清理规则: 已启用${NC}"
+    else
+        echo -e "${RED}✗ 自动清理规则: 未启用${NC}"
+    fi
+    
+    echo "=========================================="
+    read -p "按回车键继续..."
+}
+
+# 一键启用所有防护
+enable_all_protections() {
+    echo -e "${YELLOW}一键启用所有防护规则${NC}"
+    echo "----------------------------------------"
+    
+    # 启用自动IP阻止
+    if ! iptables -L INPUT | grep -q "AUTO_BLOCK"; then
+        echo "启用自动IP阻止..."
+        iptables -A INPUT -m recent --set --name AUTO_BLOCK
+        iptables -A INPUT -m recent --update --seconds 300 --hitcount 10 --name AUTO_BLOCK -j DROP
+        echo -e "${GREEN}✓ 自动IP阻止已启用${NC}"
+    else
+        echo -e "${YELLOW}自动IP阻止已启用，跳过${NC}"
+    fi
+    
+    # 启用连接频率限制
+    if ! iptables -L INPUT | grep -q "limit.*min"; then
+        echo "启用连接频率限制..."
+        iptables -A INPUT -m limit --limit 60/min -j ACCEPT
+        iptables -A INPUT -j DROP
+        echo -e "${GREEN}✓ 连接频率限制已启用${NC}"
+    else
+        echo -e "${YELLOW}连接频率限制已启用，跳过${NC}"
+    fi
+    
+    # 启用异常流量检测
+    if ! iptables -L INPUT | grep -q "NEW_CONN"; then
+        echo "启用异常流量检测..."
+        iptables -A INPUT -m state --state NEW -m recent --set --name NEW_CONN
+        iptables -A INPUT -m state --state NEW -m recent --update --seconds 60 --hitcount 20 --name NEW_CONN -j DROP
+        echo -e "${GREEN}✓ 异常流量检测已启用${NC}"
+    else
+        echo -e "${YELLOW}异常流量检测已启用，跳过${NC}"
+    fi
+    
+    # 启用自动清理规则
+    if [ ! -f "/etc/cron.d/hysteria-cleanup" ]; then
+        echo "启用自动清理规则..."
+        cat > /etc/cron.d/hysteria-cleanup << 'EOF'
+# 每60分钟清理一次无效连接
+*/60 * * * * root /usr/local/bin/hysteria-cleanup.sh
+EOF
+        echo -e "${GREEN}✓ 自动清理规则已启用${NC}"
+    else
+        echo -e "${YELLOW}自动清理规则已启用，跳过${NC}"
+    fi
+    
+    # 保存iptables规则
+    save_iptables_rules
+    echo -e "${GREEN}✓ 所有防护规则已启用${NC}"
+    read -p "按回车键继续..."
+}
+
+# 一键禁用所有防护
+disable_all_protections() {
+    echo -e "${YELLOW}一键禁用所有防护规则${NC}"
+    echo "----------------------------------------"
+    
+    # 禁用自动IP阻止
+    if iptables -L INPUT | grep -q "AUTO_BLOCK"; then
+        echo "禁用自动IP阻止..."
+        iptables -D INPUT -m recent --update --seconds 300 --hitcount 10 --name AUTO_BLOCK -j DROP 2>/dev/null || true
+        iptables -D INPUT -m recent --set --name AUTO_BLOCK 2>/dev/null || true
+        echo -e "${GREEN}✓ 自动IP阻止已禁用${NC}"
+    else
+        echo -e "${YELLOW}自动IP阻止未启用，跳过${NC}"
+    fi
+    
+    # 禁用连接频率限制
+    if iptables -L INPUT | grep -q "limit.*min"; then
+        echo "禁用连接频率限制..."
+        iptables -D INPUT -j DROP 2>/dev/null || true
+        iptables -D INPUT -m limit --limit 60/min -j ACCEPT 2>/dev/null || true
+        echo -e "${GREEN}✓ 连接频率限制已禁用${NC}"
+    else
+        echo -e "${YELLOW}连接频率限制未启用，跳过${NC}"
+    fi
+    
+    # 禁用异常流量检测
+    if iptables -L INPUT | grep -q "NEW_CONN"; then
+        echo "禁用异常流量检测..."
+        iptables -D INPUT -m state --state NEW -m recent --update --seconds 60 --hitcount 20 --name NEW_CONN -j DROP 2>/dev/null || true
+        iptables -D INPUT -m state --state NEW -m recent --set --name NEW_CONN 2>/dev/null || true
+        echo -e "${GREEN}✓ 异常流量检测已禁用${NC}"
+    else
+        echo -e "${YELLOW}异常流量检测未启用，跳过${NC}"
+    fi
+    
+    # 禁用自动清理规则
+    if [ -f "/etc/cron.d/hysteria-cleanup" ]; then
+        echo "禁用自动清理规则..."
+        rm -f /etc/cron.d/hysteria-cleanup
+        echo -e "${GREEN}✓ 自动清理规则已禁用${NC}"
+    else
+        echo -e "${YELLOW}自动清理规则未启用，跳过${NC}"
+    fi
+    
+    # 保存iptables规则
+    save_iptables_rules
+    echo -e "${GREEN}✓ 所有防护规则已禁用${NC}"
+    read -p "按回车键继续..."
+}
+
+# 保存iptables规则
+save_iptables_rules() {
+    if command -v iptables-save >/dev/null 2>&1; then
+        mkdir -p /etc/iptables
+        iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+    fi
 }
 
 # 完全卸载
