@@ -60,11 +60,13 @@ main_menu() {
         echo "4. 系统优化"
         echo "5. 检查更新"
         echo "6. 运行状态"
-        echo "7. 完全卸载"
+        echo "7. 白名单IP流量控制"
+        echo "8. 自动防护管理"
+        echo "9. 完全卸载"
         echo "0. 退出脚本"
         printf "%b====================================%b\n" "${GREEN}" "${NC}"
         
-        read -t 60 -p "请选择 [0-7]: " choice || {
+        read -t 60 -p "请选择 [0-9]: " choice || {
             printf "\n%b操作超时，退出脚本%b\n" "${YELLOW}" "${NC}"
             exit 1
         }
@@ -76,14 +78,46 @@ main_menu() {
             4) bash ./config.sh optimize ;;
             5) bash ./config.sh update ;;
             6)
-                echo -e "${YELLOW}服务端状态:${NC}"
-                systemctl status hysteria-server@* --no-pager 2>/dev/null || echo "没有运行的服务端实例"
+                echo -e "${YELLOW}═══════ 系统运行状态 ═══════${NC}"
                 echo
-                echo -e "${YELLOW}客户端状态:${NC}"
-                systemctl status hysteriaclient@* --no-pager 2>/dev/null || echo "没有运行的客户端实例"
+                
+                # 服务端状态统计
+                local server_count=0
+                local server_active=0
+                if ls /etc/hysteria/config_*.yaml 2>/dev/null | grep -q .; then
+                    server_count=$(ls /etc/hysteria/config_*.yaml 2>/dev/null | wc -l)
+                    server_active=$(systemctl list-units --type=service --state=active | grep "hysteria-server@" | wc -l)
+                fi
+                
+                # 客户端状态统计
+                local client_count=0
+                local client_active=0
+                if ls /root/*.json 2>/dev/null | grep -q .; then
+                    client_count=$(ls /root/*.json 2>/dev/null | wc -l)
+                    client_active=$(systemctl list-units --type=service --state=active | grep "hysteriaclient@" | wc -l)
+                fi
+                
+                echo -e "${GREEN}服务端: $server_active/$server_count 个实例运行中${NC}"
+                echo -e "${GREEN}客户端: $client_active/$client_count 个配置运行中${NC}"
+                
+                # 系统资源状态
+                local memory_usage=$(free | awk '/^Mem:/ {printf "%.1f%%", $3/$2*100}')
+                local cpu_usage=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1)
+                local disk_usage=$(df -h / | awk 'NR==2 {print $5}')
+                
+                echo -e "${YELLOW}系统资源: 内存 ${memory_usage} | CPU ${cpu_usage}% | 磁盘 ${disk_usage}${NC}"
+                
+                # 网络连接状态
+                local total_connections=$(ss -tuln | wc -l)
+                echo -e "${YELLOW}网络连接: $total_connections 个活跃连接${NC}"
+                
+                echo
+                echo -e "${YELLOW}════════════════════════════${NC}"
                 read -t 30 -n 1 -s -r -p "按任意键继续..."
                 ;;
-            7) bash ./config.sh uninstall ;;
+            7) bash ./config.sh whitelist ;;
+            8) protection_management ;;
+            9) bash ./config.sh uninstall ;;
             0) exit 0 ;;
             *)
                 printf "%b无效选择%b\n" "${RED}" "${NC}"
@@ -635,10 +669,12 @@ generate_instances_batch() {
         2)
             # 多用户多IP模式
             echo -e "${YELLOW}多用户多IP模式配置:${NC}"
-            read -p "请输入IP前缀 (如: 131.103.115): " ip_prefix
+            # 自动从服务器公网IP提取前缀
+            auto_prefix=$(echo "$domain" | cut -d'.' -f1-3)
+            read -p "请输入IP前缀 (从公网IP $domain 提取: $auto_prefix): " ip_prefix
             if [[ -z "$ip_prefix" ]]; then
-                ip_prefix="131.103.115"
-                echo -e "${YELLOW}使用默认IP前缀: $ip_prefix${NC}"
+                ip_prefix="$auto_prefix"
+                echo -e "${YELLOW}使用服务器IP前缀: $ip_prefix${NC}"
             fi
             
             read -p "请输入起始IP后缀 (如: 3): " start_suffix
@@ -1009,13 +1045,13 @@ EOF
     "down": "${down_bw} mbps"
   },
   "http": {
-    "listen": "0.0.0.0:$((server_port + 10000))",
+    "listen": "0.0.0.0:$((server_port))",
     "username": "$proxy_username",
     "password": "$proxy_password",
     "realm": "$http_realm"
   },
   "socks5": {
-    "listen": "0.0.0.0:$((server_port + 10000))",
+    "listen": "0.0.0.0:$((server_port))",
     "username": "$proxy_username",
     "password": "$proxy_password"
   }
@@ -1167,14 +1203,44 @@ list_instances_and_delete() {
         echo -e "${YELLOW}确认删除所有实例？(y/n): ${NC}"
         read -p "" confirm
         if [[ "$confirm" == [yY] ]]; then
+            echo -e "${YELLOW}选择删除模式:${NC}"
+            echo "1. 快速删除 (批量操作，无详细输出)"
+            echo "2. 详细删除 (逐个删除，显示进度)"
+            read -p "请选择 [1-2]: " delete_mode
+            
             deleted_count=0
-            while IFS= read -r f; do
-                p=$(basename "$f" | sed 's/^config_//;s/\.yaml$//')
-                if delete_instance "$p"; then
-                    ((deleted_count++))
-                fi
-            done < <(ls $CONFIG_DIR/config_*.yaml 2>/dev/null)
-            echo -e "${GREEN}已删除 $deleted_count 个实例${NC}"
+            if [[ "$delete_mode" == "1" ]]; then
+                # 快速删除模式
+                echo -e "${YELLOW}正在快速删除所有实例...${NC}"
+                
+                # 批量停止所有服务
+                systemctl stop hysteria-server@* 2>/dev/null || true
+                systemctl disable hysteria-server@* 2>/dev/null || true
+                
+                # 批量删除配置文件
+                rm -f $CONFIG_DIR/config_*.yaml 2>/dev/null || true
+                
+                # 批量删除systemd服务文件
+                rm -f /etc/systemd/system/hysteria-server@*.service 2>/dev/null || true
+                
+                # 重新加载systemd
+                systemctl daemon-reload 2>/dev/null || true
+                
+                # 统计删除的实例数量
+                deleted_count=$(ls $CONFIG_DIR/config_*.yaml 2>/dev/null | wc -l)
+                deleted_count=$((deleted_count - deleted_count)) # 计算实际删除数量
+                
+                echo -e "${GREEN}✓ 快速删除完成，已删除所有实例${NC}"
+            else
+                # 详细删除模式
+                while IFS= read -r f; do
+                    p=$(basename "$f" | sed 's/^config_//;s/\.yaml$//')
+                    if delete_instance "$p"; then
+                        ((deleted_count++))
+                    fi
+                done < <(ls $CONFIG_DIR/config_*.yaml 2>/dev/null)
+                echo -e "${GREEN}已删除 $deleted_count 个实例${NC}"
+            fi
         else
             echo -e "${YELLOW}取消删除操作${NC}"
         fi
@@ -1605,6 +1671,7 @@ status_server_unified_service() {
 
 status_all_instances_internal() {
     echo -e "${YELLOW}所有实例状态:${NC}"
+    echo "=========================================="
     
     # 检查是否有配置文件
     if ! ls $CONFIG_DIR/config_*.yaml 2>/dev/null | grep -q .; then
@@ -1612,12 +1679,65 @@ status_all_instances_internal() {
         return
     fi
     
+    local total_instances=0
+    local active_instances=0
+    local inactive_instances=0
+    
     # 使用进程替换避免子shell问题
     while IFS= read -r f; do
         port=$(basename "$f" | sed 's/^config_//;s/\.yaml$//')
         status=$(systemctl is-active hysteria-server@$port.service 2>/dev/null || echo "inactive")
-        echo "端口: $port | 状态: $status"
+        enabled=$(systemctl is-enabled hysteria-server@$port.service 2>/dev/null || echo "disabled")
+        
+        # 获取进程信息
+        local pid=$(systemctl show hysteria-server@$port.service --property=MainPID --value 2>/dev/null || echo "")
+        local memory=""
+        local cpu=""
+        
+        if [ -n "$pid" ] && [ "$pid" != "0" ]; then
+            memory=$(ps -p $pid -o rss= 2>/dev/null | awk '{printf "%.1fMB", $1/1024}' || echo "N/A")
+            cpu=$(ps -p $pid -o %cpu= 2>/dev/null | awk '{printf "%.1f%%", $1}' || echo "N/A")
+        fi
+        
+        # 获取监听状态
+        local listening=""
+        if ss -lnt | grep -q ":$port "; then
+            listening="✓"
+        else
+            listening="✗"
+        fi
+        
+        # 显示状态信息
+        if [ "$status" = "active" ]; then
+            echo -e "${GREEN}端口: $port${NC} | 状态: ${GREEN}$status${NC} | 启用: $enabled | 监听: $listening"
+            if [ -n "$memory" ] && [ "$memory" != "N/A" ]; then
+                echo "  └─ PID: $pid | 内存: $memory | CPU: $cpu"
+            fi
+            ((active_instances++))
+        else
+            echo -e "${RED}端口: $port${NC} | 状态: ${RED}$status${NC} | 启用: $enabled | 监听: $listening"
+            ((inactive_instances++))
+        fi
+        
+        ((total_instances++))
     done < <(ls $CONFIG_DIR/config_*.yaml 2>/dev/null)
+    
+    echo "=========================================="
+    echo -e "${GREEN}总计: $total_instances 个实例${NC} | ${GREEN}运行中: $active_instances${NC} | ${RED}已停止: $inactive_instances${NC}"
+    
+    # 显示系统资源使用情况
+    echo
+    echo -e "${YELLOW}系统资源使用情况:${NC}"
+    local total_memory=$(free -h | awk '/^Mem:/ {print $3 "/" $2}')
+    local total_cpu=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1)
+    echo "  内存使用: $total_memory"
+    echo "  CPU使用: ${total_cpu}%"
+    
+    # 显示网络连接统计
+    local total_connections=$(ss -tuln | wc -l)
+    local hysteria_connections=$(ss -tuln | grep -E ":443|:80|:22" | wc -l)
+    echo "  总连接数: $total_connections"
+    echo "  关键端口连接: $hysteria_connections"
 }
 
 status_port_range_instances() {
@@ -1666,8 +1786,44 @@ generate_instance_auto() {
     done
 
     if is_port_in_use "$server_port" || [ -f "$CONFIG_DIR/config_${server_port}.yaml" ]; then
-        echo -e "${RED}端口 $server_port 已被占用或已存在实例，请换一个端口。${NC}"
-        return
+        echo -e "${RED}端口 $server_port 已被占用或已存在实例${NC}"
+        
+        # 检查端口占用情况
+        local pid=$(lsof -ti:$server_port 2>/dev/null || netstat -tulpn 2>/dev/null | grep ":$server_port " | awk '{print $7}' | cut -d'/' -f1 | head -1)
+        if [ -n "$pid" ] && [ "$pid" != "-" ]; then
+            local process_info=$(ps -p $pid -o comm= 2>/dev/null || echo "未知进程")
+            echo -e "${YELLOW}占用进程: $process_info (PID: $pid)${NC}"
+            
+            read -p "是否强制停止进程 $pid 以释放端口 $server_port? (y/n): " confirm
+            if [[ $confirm == [yY] ]]; then
+                echo -e "${YELLOW}正在停止进程 $pid...${NC}"
+                
+                # 尝试优雅停止
+                kill -TERM $pid 2>/dev/null
+                sleep 2
+                
+                # 检查是否还在运行
+                if kill -0 $pid 2>/dev/null; then
+                    echo -e "${YELLOW}进程仍在运行，强制终止...${NC}"
+                    kill -KILL $pid 2>/dev/null
+                    sleep 1
+                fi
+                
+                # 验证端口是否已释放
+                if ! lsof -ti:$server_port >/dev/null 2>&1; then
+                    echo -e "${GREEN}✓ 端口 $server_port 已释放，继续配置${NC}"
+                else
+                    echo -e "${RED}端口 $server_port 仍被占用，请换一个端口${NC}"
+                    return
+                fi
+            else
+                echo -e "${RED}请换一个端口${NC}"
+                return
+            fi
+        else
+            echo -e "${RED}请换一个端口${NC}"
+            return
+        fi
     fi
 
     echo -e "${YELLOW}请输入带宽限制（单位 mbps，直接回车为默认185）：${NC}"
@@ -1934,13 +2090,13 @@ EOF
     "down": "${down_bw} mbps"
   },
   "http": {
-    "listen": "0.0.0.0:$((server_port + 10000))",
+    "listen": "0.0.0.0:$((server_port))",
     "username": "$proxy_username",
     "password": "$proxy_password",
     "realm": "$http_realm"
   },
   "socks5": {
-    "listen": "0.0.0.0:$((server_port + 10000))",
+    "listen": "0.0.0.0:$((server_port))",
     "username": "$proxy_username",
     "password": "$proxy_password"
   }
@@ -2693,7 +2849,8 @@ status_unified_service() {
 }
 
 status_all_clients_internal() {
-    echo -e "${YELLOW}所有客户端 systemd 状态：${NC}"
+    echo -e "${YELLOW}所有客户端状态:${NC}"
+    echo "=========================================="
     
     # 检查是否有配置文件
     if ! ls /root/*.json 2>/dev/null | grep -q .; then
@@ -2701,14 +2858,14 @@ status_all_clients_internal() {
         return
     fi
     
+    local total_clients=0
+    local active_clients=0
+    local inactive_clients=0
+    
     shopt -s nullglob
-    found=0
     for cfg in /root/*.json; do
         [ -f "$cfg" ] || continue
         name=$(basename "${cfg%.json}")
-        found=1
-        
-        echo -e "${GREEN}[$name]${NC}"
         
         # 检查服务是否存在
         if systemctl list-unit-files | grep -q "hysteriaclient@$name.service"; then
@@ -2716,22 +2873,64 @@ status_all_clients_internal() {
             status=$(systemctl is-active hysteriaclient@"$name" 2>/dev/null || echo "inactive")
             loaded=$(systemctl is-enabled hysteriaclient@"$name" 2>/dev/null || echo "disabled")
             
-            echo "  状态: $status"
-            echo "  启用: $loaded"
+            # 获取进程信息
+            local pid=$(systemctl show hysteriaclient@$name --property=MainPID --value 2>/dev/null || echo "")
+            local memory=""
+            local cpu=""
+            local uptime=""
             
-            # 如果服务正在运行，显示更多信息
+            if [ -n "$pid" ] && [ "$pid" != "0" ]; then
+                memory=$(ps -p $pid -o rss= 2>/dev/null | awk '{printf "%.1fMB", $1/1024}' || echo "N/A")
+                cpu=$(ps -p $pid -o %cpu= 2>/dev/null | awk '{printf "%.1f%%", $1}' || echo "N/A")
+                uptime=$(systemctl show hysteriaclient@$name --property=ActiveEnterTimestamp | cut -d= -f2 2>/dev/null || echo "N/A")
+            fi
+            
+            # 显示状态信息
             if [ "$status" = "active" ]; then
-                echo "  运行时间: $(systemctl show hysteriaclient@$name --property=ActiveEnterTimestamp | cut -d= -f2)"
+                echo -e "${GREEN}配置: $name${NC} | 状态: ${GREEN}$status${NC} | 启用: $loaded"
+                if [ -n "$memory" ] && [ "$memory" != "N/A" ]; then
+                    echo "  └─ PID: $pid | 内存: $memory | CPU: $cpu | 运行时间: $uptime"
+                fi
+                ((active_clients++))
+            else
+                echo -e "${RED}配置: $name${NC} | 状态: ${RED}$status${NC} | 启用: $loaded"
+                ((inactive_clients++))
             fi
         else
-            echo "  服务未注册"
+            echo -e "${YELLOW}配置: $name${NC} | 状态: ${YELLOW}服务未注册${NC}"
+            ((inactive_clients++))
         fi
         
-        echo "---------------------------------------"
+        ((total_clients++))
     done
     
-    if [ $found -eq 0 ]; then
-        echo -e "${YELLOW}没有找到任何客户端配置文件${NC}"
+    echo "=========================================="
+    echo -e "${GREEN}总计: $total_clients 个客户端${NC} | ${GREEN}运行中: $active_clients${NC} | ${RED}已停止: $inactive_clients${NC}"
+    
+    # 显示系统资源使用情况
+    echo
+    echo -e "${YELLOW}系统资源使用情况:${NC}"
+    local total_memory=$(free -h | awk '/^Mem:/ {print $3 "/" $2}')
+    local total_cpu=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1)
+    echo "  内存使用: $total_memory"
+    echo "  CPU使用: ${total_cpu}%"
+    
+    # 显示网络连接统计
+    local total_connections=$(ss -tuln | wc -l)
+    local client_connections=$(ss -tuln | grep -E ":20000|:20001|:20002" | wc -l)
+    echo "  总连接数: $total_connections"
+    echo "  客户端端口连接: $client_connections"
+    
+    # 显示最近日志
+    echo
+    echo -e "${YELLOW}最近客户端日志 (最后5条):${NC}"
+    if [ -d "/var/log" ]; then
+        find /var/log -name "hysteria-client-*.log" -type f 2>/dev/null | head -3 | while read logfile; do
+            if [ -f "$logfile" ]; then
+                echo "  $(basename $logfile):"
+                tail -2 "$logfile" 2>/dev/null | sed 's/^/    /'
+            fi
+        done
     fi
 }
 
@@ -2825,15 +3024,41 @@ delete_config() {
         echo -e "${YELLOW}确认删除所有客户端配置？(y/n): ${NC}"
         read -p "" confirm
         if [[ "$confirm" == [yY] ]]; then
+            echo -e "${YELLOW}选择删除模式:${NC}"
+            echo "1. 快速删除 (批量操作，无详细输出)"
+            echo "2. 详细删除 (逐个删除，显示进度)"
+            read -p "请选择 [1-2]: " delete_mode
+            
             deleted_count=0
-            for cfg in /root/*.json; do
-                [ -f "$cfg" ] || continue
-                cname=$(basename "${cfg%.json}")
-                if delete_client_config "$cname"; then
-                    ((deleted_count++))
-                fi
-            done
-            echo -e "${GREEN}已删除 $deleted_count 个客户端配置${NC}"
+            if [[ "$delete_mode" == "1" ]]; then
+                # 快速删除模式
+                echo -e "${YELLOW}正在快速删除所有客户端配置...${NC}"
+                
+                # 批量停止所有客户端服务
+                systemctl stop hysteriaclient@* 2>/dev/null || true
+                systemctl disable hysteriaclient@* 2>/dev/null || true
+                
+                # 批量删除配置文件
+                rm -f /root/*.json 2>/dev/null || true
+                
+                # 批量删除日志文件
+                rm -f /var/log/hysteria-client-*.log 2>/dev/null || true
+                
+                # 重新加载systemd
+                systemctl daemon-reload 2>/dev/null || true
+                
+                echo -e "${GREEN}✓ 快速删除完成，已删除所有客户端配置${NC}"
+            else
+                # 详细删除模式
+                for cfg in /root/*.json; do
+                    [ -f "$cfg" ] || continue
+                    cname=$(basename "${cfg%.json}")
+                    if delete_client_config "$cname"; then
+                        ((deleted_count++))
+                    fi
+                done
+                echo -e "${GREEN}已删除 $deleted_count 个客户端配置${NC}"
+            fi
         else
             echo -e "${YELLOW}取消删除操作${NC}"
         fi
@@ -3111,6 +3336,395 @@ update() {
     sleep 2
 }
 
+# 自动防护管理
+protection_management() {
+    while true; do
+        clear
+        printf "%b═══════ 自动防护管理 ═══════%b\n" "${GREEN}" "${NC}"
+        echo "1. 自动IP阻止管理"
+        echo "2. 连接频率限制管理"
+        echo "3. 异常流量检测管理"
+        echo "4. 自动清理规则管理"
+        echo "5. 查看所有防护规则状态"
+        echo "6. 一键启用所有防护"
+        echo "7. 一键禁用所有防护"
+        echo "0. 返回主菜单"
+        printf "%b====================================%b\n" "${GREEN}" "${NC}"
+        
+        read -t 60 -p "请选择 [0-7]: " choice || {
+            printf "\n%b操作超时，返回主菜单%b\n" "${YELLOW}" "${NC}"
+            return
+        }
+        
+        case $choice in
+            1) manage_auto_ip_block ;;
+            2) manage_connection_rate_limit ;;
+            3) manage_anomaly_detection ;;
+            4) manage_auto_cleanup ;;
+            5) show_protection_rules_status ;;
+            6) enable_all_protections ;;
+            7) disable_all_protections ;;
+            0) return ;;
+            *)
+                printf "%b无效选择%b\n" "${RED}" "${NC}"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# 管理自动IP阻止
+manage_auto_ip_block() {
+    echo -e "${YELLOW}自动IP阻止管理${NC}"
+    echo "----------------------------------------"
+    
+    # 检查是否已启用
+    if iptables -L INPUT | grep -q "AUTO_BLOCK"; then
+        echo -e "${GREEN}当前状态: 已启用${NC}"
+        echo "1. 禁用自动IP阻止"
+        echo "2. 重新配置规则"
+        read -p "请选择 [1-2]: " choice
+        
+        case $choice in
+            1)
+                echo "正在禁用自动IP阻止..."
+                iptables -D INPUT -m recent --update --seconds 300 --hitcount 10 --name AUTO_BLOCK -j DROP 2>/dev/null || true
+                iptables -D INPUT -m recent --set --name AUTO_BLOCK 2>/dev/null || true
+                echo -e "${GREEN}✓ 自动IP阻止已禁用${NC}"
+                ;;
+            2)
+                echo "重新配置自动IP阻止规则..."
+                iptables -D INPUT -m recent --update --seconds 300 --hitcount 10 --name AUTO_BLOCK -j DROP 2>/dev/null || true
+                iptables -D INPUT -m recent --set --name AUTO_BLOCK 2>/dev/null || true
+                read -p "请输入阻止时间(秒) [默认: 300]: " block_time
+                read -p "请输入触发次数 [默认: 10]: " hit_count
+                block_time=${block_time:-300}
+                hit_count=${hit_count:-10}
+                iptables -A INPUT -m recent --set --name AUTO_BLOCK
+                iptables -A INPUT -m recent --update --seconds $block_time --hitcount $hit_count --name AUTO_BLOCK -j DROP
+                echo -e "${GREEN}✓ 自动IP阻止已重新配置 (${hit_count}次/${block_time}秒)${NC}"
+                ;;
+        esac
+    else
+        echo -e "${RED}当前状态: 未启用${NC}"
+        echo "1. 启用自动IP阻止"
+        read -p "请选择 [1]: " choice
+        
+        if [ "$choice" = "1" ]; then
+            read -p "请输入阻止时间(秒) [默认: 300]: " block_time
+            read -p "请输入触发次数 [默认: 10]: " hit_count
+            block_time=${block_time:-300}
+            hit_count=${hit_count:-10}
+            iptables -A INPUT -m recent --set --name AUTO_BLOCK
+            iptables -A INPUT -m recent --update --seconds $block_time --hitcount $hit_count --name AUTO_BLOCK -j DROP
+            echo -e "${GREEN}✓ 自动IP阻止已启用 (${hit_count}次/${block_time}秒)${NC}"
+        fi
+    fi
+    
+    # 保存iptables规则
+    save_iptables_rules
+    read -p "按回车键继续..."
+}
+
+# 管理连接频率限制
+manage_connection_rate_limit() {
+    echo -e "${YELLOW}连接频率限制管理${NC}"
+    echo "----------------------------------------"
+    
+    # 检查是否已启用
+    if iptables -L INPUT | grep -q "limit.*min"; then
+        echo -e "${GREEN}当前状态: 已启用${NC}"
+        echo "1. 禁用连接频率限制"
+        echo "2. 重新配置限制"
+        read -p "请选择 [1-2]: " choice
+        
+        case $choice in
+            1)
+                echo "正在禁用连接频率限制..."
+                iptables -D INPUT -j DROP 2>/dev/null || true
+                iptables -D INPUT -m limit --limit 60/min -j ACCEPT 2>/dev/null || true
+                echo -e "${GREEN}✓ 连接频率限制已禁用${NC}"
+                ;;
+            2)
+                echo "重新配置连接频率限制..."
+                iptables -D INPUT -j DROP 2>/dev/null || true
+                iptables -D INPUT -m limit --limit 60/min -j ACCEPT 2>/dev/null || true
+                read -p "请输入每分钟最大连接数 [默认: 60]: " max_conn
+                max_conn=${max_conn:-60}
+                iptables -A INPUT -m limit --limit $max_conn/min -j ACCEPT
+                iptables -A INPUT -j DROP
+                echo -e "${GREEN}✓ 连接频率限制已重新配置 (${max_conn}/分钟)${NC}"
+                ;;
+        esac
+    else
+        echo -e "${RED}当前状态: 未启用${NC}"
+        echo "1. 启用连接频率限制"
+        read -p "请选择 [1]: " choice
+        
+        if [ "$choice" = "1" ]; then
+            read -p "请输入每分钟最大连接数 [默认: 60]: " max_conn
+            max_conn=${max_conn:-60}
+            iptables -A INPUT -m limit --limit $max_conn/min -j ACCEPT
+            iptables -A INPUT -j DROP
+            echo -e "${GREEN}✓ 连接频率限制已启用 (${max_conn}/分钟)${NC}"
+        fi
+    fi
+    
+    # 保存iptables规则
+    save_iptables_rules
+    read -p "按回车键继续..."
+}
+
+# 管理异常流量检测
+manage_anomaly_detection() {
+    echo -e "${YELLOW}异常流量检测管理${NC}"
+    echo "----------------------------------------"
+    
+    # 检查是否已启用
+    if iptables -L INPUT | grep -q "NEW_CONN"; then
+        echo -e "${GREEN}当前状态: 已启用${NC}"
+        echo "1. 禁用异常流量检测"
+        echo "2. 重新配置检测规则"
+        read -p "请选择 [1-2]: " choice
+        
+        case $choice in
+            1)
+                echo "正在禁用异常流量检测..."
+                iptables -D INPUT -m state --state NEW -m recent --update --seconds 60 --hitcount 20 --name NEW_CONN -j DROP 2>/dev/null || true
+                iptables -D INPUT -m state --state NEW -m recent --set --name NEW_CONN 2>/dev/null || true
+                echo -e "${GREEN}✓ 异常流量检测已禁用${NC}"
+                ;;
+            2)
+                echo "重新配置异常流量检测..."
+                iptables -D INPUT -m state --state NEW -m recent --update --seconds 60 --hitcount 20 --name NEW_CONN -j DROP 2>/dev/null || true
+                iptables -D INPUT -m state --state NEW -m recent --set --name NEW_CONN 2>/dev/null || true
+                read -p "请输入检测时间窗口(秒) [默认: 60]: " time_window
+                read -p "请输入触发次数 [默认: 20]: " hit_count
+                time_window=${time_window:-60}
+                hit_count=${hit_count:-20}
+                iptables -A INPUT -m state --state NEW -m recent --set --name NEW_CONN
+                iptables -A INPUT -m state --state NEW -m recent --update --seconds $time_window --hitcount $hit_count --name NEW_CONN -j DROP
+                echo -e "${GREEN}✓ 异常流量检测已重新配置 (${hit_count}次/${time_window}秒)${NC}"
+                ;;
+        esac
+    else
+        echo -e "${RED}当前状态: 未启用${NC}"
+        echo "1. 启用异常流量检测"
+        read -p "请选择 [1]: " choice
+        
+        if [ "$choice" = "1" ]; then
+            read -p "请输入检测时间窗口(秒) [默认: 60]: " time_window
+            read -p "请输入触发次数 [默认: 20]: " hit_count
+            time_window=${time_window:-60}
+            hit_count=${hit_count:-20}
+            iptables -A INPUT -m state --state NEW -m recent --set --name NEW_CONN
+            iptables -A INPUT -m state --state NEW -m recent --update --seconds $time_window --hitcount $hit_count --name NEW_CONN -j DROP
+            echo -e "${GREEN}✓ 异常流量检测已启用 (${hit_count}次/${time_window}秒)${NC}"
+        fi
+    fi
+    
+    # 保存iptables规则
+    save_iptables_rules
+    read -p "按回车键继续..."
+}
+
+# 管理自动清理规则
+manage_auto_cleanup() {
+    echo -e "${YELLOW}自动清理规则管理${NC}"
+    echo "----------------------------------------"
+    
+    # 检查是否已启用
+    if [ -f "/etc/cron.d/hysteria-cleanup" ]; then
+        echo -e "${GREEN}当前状态: 已启用${NC}"
+        echo "1. 禁用自动清理规则"
+        echo "2. 重新配置清理规则"
+        read -p "请选择 [1-2]: " choice
+        
+        case $choice in
+            1)
+                echo "正在禁用自动清理规则..."
+                rm -f /etc/cron.d/hysteria-cleanup
+                echo -e "${GREEN}✓ 自动清理规则已禁用${NC}"
+                ;;
+            2)
+                echo "重新配置自动清理规则..."
+                rm -f /etc/cron.d/hysteria-cleanup
+                read -p "请输入清理间隔(分钟) [默认: 60]: " interval
+                interval=${interval:-60}
+                cat > /etc/cron.d/hysteria-cleanup << EOF
+# 每${interval}分钟清理一次无效连接
+*/${interval} * * * * root /usr/local/bin/hysteria-cleanup.sh
+EOF
+                echo -e "${GREEN}✓ 自动清理规则已重新配置 (每${interval}分钟)${NC}"
+                ;;
+        esac
+    else
+        echo -e "${RED}当前状态: 未启用${NC}"
+        echo "1. 启用自动清理规则"
+        read -p "请选择 [1]: " choice
+        
+        if [ "$choice" = "1" ]; then
+            read -p "请输入清理间隔(分钟) [默认: 60]: " interval
+            interval=${interval:-60}
+            cat > /etc/cron.d/hysteria-cleanup << EOF
+# 每${interval}分钟清理一次无效连接
+*/${interval} * * * * root /usr/local/bin/hysteria-cleanup.sh
+EOF
+            echo -e "${GREEN}✓ 自动清理规则已启用 (每${interval}分钟)${NC}"
+        fi
+    fi
+    
+    read -p "按回车键继续..."
+}
+
+# 查看所有防护规则状态
+show_protection_rules_status() {
+    echo -e "${YELLOW}防护规则状态总览${NC}"
+    echo "=========================================="
+    
+    # 检查自动IP阻止
+    if iptables -L INPUT | grep -q "AUTO_BLOCK"; then
+        echo -e "${GREEN}✓ 自动IP阻止: 已启用${NC}"
+    else
+        echo -e "${RED}✗ 自动IP阻止: 未启用${NC}"
+    fi
+    
+    # 检查连接频率限制
+    if iptables -L INPUT | grep -q "limit.*min"; then
+        echo -e "${GREEN}✓ 连接频率限制: 已启用${NC}"
+    else
+        echo -e "${RED}✗ 连接频率限制: 未启用${NC}"
+    fi
+    
+    # 检查异常流量检测
+    if iptables -L INPUT | grep -q "NEW_CONN"; then
+        echo -e "${GREEN}✓ 异常流量检测: 已启用${NC}"
+    else
+        echo -e "${RED}✗ 异常流量检测: 未启用${NC}"
+    fi
+    
+    # 检查自动清理规则
+    if [ -f "/etc/cron.d/hysteria-cleanup" ]; then
+        echo -e "${GREEN}✓ 自动清理规则: 已启用${NC}"
+    else
+        echo -e "${RED}✗ 自动清理规则: 未启用${NC}"
+    fi
+    
+    echo "=========================================="
+    read -p "按回车键继续..."
+}
+
+# 一键启用所有防护
+enable_all_protections() {
+    echo -e "${YELLOW}一键启用所有防护规则${NC}"
+    echo "----------------------------------------"
+    
+    # 启用自动IP阻止
+    if ! iptables -L INPUT | grep -q "AUTO_BLOCK"; then
+        echo "启用自动IP阻止..."
+        iptables -A INPUT -m recent --set --name AUTO_BLOCK
+        iptables -A INPUT -m recent --update --seconds 300 --hitcount 10 --name AUTO_BLOCK -j DROP
+        echo -e "${GREEN}✓ 自动IP阻止已启用${NC}"
+    else
+        echo -e "${YELLOW}自动IP阻止已启用，跳过${NC}"
+    fi
+    
+    # 启用连接频率限制
+    if ! iptables -L INPUT | grep -q "limit.*min"; then
+        echo "启用连接频率限制..."
+        iptables -A INPUT -m limit --limit 60/min -j ACCEPT
+        iptables -A INPUT -j DROP
+        echo -e "${GREEN}✓ 连接频率限制已启用${NC}"
+    else
+        echo -e "${YELLOW}连接频率限制已启用，跳过${NC}"
+    fi
+    
+    # 启用异常流量检测
+    if ! iptables -L INPUT | grep -q "NEW_CONN"; then
+        echo "启用异常流量检测..."
+        iptables -A INPUT -m state --state NEW -m recent --set --name NEW_CONN
+        iptables -A INPUT -m state --state NEW -m recent --update --seconds 60 --hitcount 20 --name NEW_CONN -j DROP
+        echo -e "${GREEN}✓ 异常流量检测已启用${NC}"
+    else
+        echo -e "${YELLOW}异常流量检测已启用，跳过${NC}"
+    fi
+    
+    # 启用自动清理规则
+    if [ ! -f "/etc/cron.d/hysteria-cleanup" ]; then
+        echo "启用自动清理规则..."
+        cat > /etc/cron.d/hysteria-cleanup << 'EOF'
+# 每60分钟清理一次无效连接
+*/60 * * * * root /usr/local/bin/hysteria-cleanup.sh
+EOF
+        echo -e "${GREEN}✓ 自动清理规则已启用${NC}"
+    else
+        echo -e "${YELLOW}自动清理规则已启用，跳过${NC}"
+    fi
+    
+    # 保存iptables规则
+    save_iptables_rules
+    echo -e "${GREEN}✓ 所有防护规则已启用${NC}"
+    read -p "按回车键继续..."
+}
+
+# 一键禁用所有防护
+disable_all_protections() {
+    echo -e "${YELLOW}一键禁用所有防护规则${NC}"
+    echo "----------------------------------------"
+    
+    # 禁用自动IP阻止
+    if iptables -L INPUT | grep -q "AUTO_BLOCK"; then
+        echo "禁用自动IP阻止..."
+        iptables -D INPUT -m recent --update --seconds 300 --hitcount 10 --name AUTO_BLOCK -j DROP 2>/dev/null || true
+        iptables -D INPUT -m recent --set --name AUTO_BLOCK 2>/dev/null || true
+        echo -e "${GREEN}✓ 自动IP阻止已禁用${NC}"
+    else
+        echo -e "${YELLOW}自动IP阻止未启用，跳过${NC}"
+    fi
+    
+    # 禁用连接频率限制
+    if iptables -L INPUT | grep -q "limit.*min"; then
+        echo "禁用连接频率限制..."
+        iptables -D INPUT -j DROP 2>/dev/null || true
+        iptables -D INPUT -m limit --limit 60/min -j ACCEPT 2>/dev/null || true
+        echo -e "${GREEN}✓ 连接频率限制已禁用${NC}"
+    else
+        echo -e "${YELLOW}连接频率限制未启用，跳过${NC}"
+    fi
+    
+    # 禁用异常流量检测
+    if iptables -L INPUT | grep -q "NEW_CONN"; then
+        echo "禁用异常流量检测..."
+        iptables -D INPUT -m state --state NEW -m recent --update --seconds 60 --hitcount 20 --name NEW_CONN -j DROP 2>/dev/null || true
+        iptables -D INPUT -m state --state NEW -m recent --set --name NEW_CONN 2>/dev/null || true
+        echo -e "${GREEN}✓ 异常流量检测已禁用${NC}"
+    else
+        echo -e "${YELLOW}异常流量检测未启用，跳过${NC}"
+    fi
+    
+    # 禁用自动清理规则
+    if [ -f "/etc/cron.d/hysteria-cleanup" ]; then
+        echo "禁用自动清理规则..."
+        rm -f /etc/cron.d/hysteria-cleanup
+        echo -e "${GREEN}✓ 自动清理规则已禁用${NC}"
+    else
+        echo -e "${YELLOW}自动清理规则未启用，跳过${NC}"
+    fi
+    
+    # 保存iptables规则
+    save_iptables_rules
+    echo -e "${GREEN}✓ 所有防护规则已禁用${NC}"
+    read -p "按回车键继续..."
+}
+
+# 保存iptables规则
+save_iptables_rules() {
+    if command -v iptables-save >/dev/null 2>&1; then
+        mkdir -p /etc/iptables
+        iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+    fi
+}
+
 # 完全卸载
 uninstall() {
     printf "%b═══════ 卸载确认 ═══════%b\n" "${YELLOW}" "${NC}"
@@ -3335,6 +3949,62 @@ cleanup_hysteria_iptables_rules() {
     fi
 }
 
+# 检查并清理端口占用
+check_and_free_ports() {
+    printf "%b检查端口占用情况...%b\n" "${YELLOW}" "${NC}"
+    
+    local ports_to_check=(443 80 22 8080 8443)
+    local freed_ports=()
+    
+    for port in "${ports_to_check[@]}"; do
+        # 检查端口是否被占用
+        local pid=$(lsof -ti:$port 2>/dev/null || netstat -tulpn 2>/dev/null | grep ":$port " | awk '{print $7}' | cut -d'/' -f1 | head -1)
+        
+        if [ -n "$pid" ] && [ "$pid" != "-" ]; then
+            printf "%b端口 $port 被进程 $pid 占用%b\n" "${YELLOW}" "${NC}"
+            
+            # 获取进程信息
+            local process_info=$(ps -p $pid -o comm= 2>/dev/null || echo "未知进程")
+            printf "%b进程信息: $process_info%b\n" "${YELLOW}" "${NC}"
+            
+            # 询问是否强制停止
+            read -p "是否强制停止进程 $pid 以释放端口 $port? (y/n): " confirm
+            if [[ $confirm == [yY] ]]; then
+                printf "%b正在停止进程 $pid...%b\n" "${YELLOW}" "${NC}"
+                
+                # 尝试优雅停止
+                kill -TERM $pid 2>/dev/null
+                sleep 2
+                
+                # 检查是否还在运行
+                if kill -0 $pid 2>/dev/null; then
+                    printf "%b进程仍在运行，强制终止...%b\n" "${YELLOW}" "${NC}"
+                    kill -KILL $pid 2>/dev/null
+                    sleep 1
+                fi
+                
+                # 验证端口是否已释放
+                if ! lsof -ti:$port >/dev/null 2>&1; then
+                    printf "%b✓ 端口 $port 已释放%b\n" "${GREEN}" "${NC}"
+                    freed_ports+=($port)
+                else
+                    printf "%b⚠ 端口 $port 可能仍被占用%b\n" "${YELLOW}" "${NC}"
+                fi
+            else
+                printf "%b跳过端口 $port%b\n" "${YELLOW}" "${NC}"
+            fi
+        else
+            printf "%b✓ 端口 $port 可用%b\n" "${GREEN}" "${NC}"
+        fi
+    done
+    
+    if [ ${#freed_ports[@]} -gt 0 ]; then
+        printf "%b已释放端口: ${freed_ports[*]}%b\n" "${GREEN}" "${NC}"
+    fi
+    
+    printf "%b端口检查完成%b\n" "${GREEN}" "${NC}"
+}
+
 # 安装基础依赖
 install_base() {
     printf "%b安装基础依赖...%b\n" "${YELLOW}" "${NC}"
@@ -3364,7 +4034,9 @@ install_base() {
             fi
             
             printf "%b安装基础工具...%b\n" "${YELLOW}" "${NC}"
-            if timeout 300 apt install -y curl wget openssl net-tools 2>/dev/null; then
+            if echo "iptables-persistent iptables-persistent/autosave_v4 boolean true" | debconf-set-selections && \
+               echo "iptables-persistent iptables-persistent/autosave_v6 boolean true" | debconf-set-selections && \
+               timeout 300 apt install -y curl wget openssl net-tools iptables iptables-persistent 2>/dev/null; then
                 printf "%b✓ 基础依赖安装成功%b\n" "${GREEN}" "${NC}"
             else
                 printf "%b⚠ 部分依赖安装失败，尝试继续%b\n" "${YELLOW}" "${NC}"
@@ -3372,15 +4044,17 @@ install_base() {
             ;;
         "redhat")
             printf "%b安装基础工具...%b\n" "${YELLOW}" "${NC}"
-            if timeout 300 yum install -y curl wget openssl net-tools 2>/dev/null; then
+            if timeout 300 yum install -y curl wget openssl net-tools iptables iptables-services 2>/dev/null; then
                 printf "%b✓ 基础依赖安装成功%b\n" "${GREEN}" "${NC}"
+                # 启用iptables服务
+                systemctl enable iptables 2>/dev/null || true
             else
                 printf "%b⚠ 部分依赖安装失败，尝试继续%b\n" "${YELLOW}" "${NC}"
             fi
             ;;
         "arch")
             printf "%b安装基础工具...%b\n" "${YELLOW}" "${NC}"
-            if timeout 300 pacman -S --noconfirm curl wget openssl net-tools 2>/dev/null; then
+            if timeout 300 pacman -S --noconfirm curl wget openssl net-tools iptables 2>/dev/null; then
                 printf "%b✓ 基础依赖安装成功%b\n" "${GREEN}" "${NC}"
             else
                 printf "%b⚠ 部分依赖安装失败，尝试继续%b\n" "${YELLOW}" "${NC}"
@@ -3390,7 +4064,7 @@ install_base() {
             printf "%b尝试通用安装方法...%b\n" "${YELLOW}" "${NC}"
             # 尝试使用which检查工具是否已安装
             local missing_tools=""
-            for tool in curl wget openssl; do
+            for tool in curl wget openssl iptables; do
                 if ! command -v "$tool" >/dev/null 2>&1; then
                     missing_tools="$missing_tools $tool"
                 fi
@@ -3652,6 +4326,7 @@ main() {
     printf "%b============================================%b\n" "${GREEN}" "${NC}"
     
     cleanup_old_installation
+    check_and_free_ports
     install_base || exit 1
     install_hysteria || exit 1
     create_all_scripts
