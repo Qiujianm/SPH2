@@ -437,13 +437,18 @@ configure_ip_binding() {
 configure_multi_user_ip() {
     echo -e "${YELLOW}配置多用户多IP系统${NC}"
     
+    # 获取服务器公网IP
+    local domain=$(curl -s ipinfo.io/ip || curl -s myip.ipip.net | grep -oE "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" || curl -s https://api.ip.sb/ip)
+    if [ -z "$domain" ]; then
+        read -p "请输入服务器公网IP: " domain
+    fi
+    echo -e "${YELLOW}服务器公网IP: $domain${NC}"
+    
     # 获取IP范围
     echo -e "${YELLOW}请输入IP配置信息:${NC}"
-    read -p "请输入IP前缀 (如: 131.103.115): " ip_prefix
-    if [[ -z "$ip_prefix" ]]; then
-        ip_prefix="131.103.115"
-        echo -e "${YELLOW}使用默认IP前缀: $ip_prefix${NC}"
-    fi
+    # 自动从服务器公网IP提取前缀
+    ip_prefix=$(echo "$domain" | cut -d'.' -f1-3)
+    echo -e "${YELLOW}自动使用服务器IP前缀: $ip_prefix${NC}"
     
     read -p "请输入起始IP后缀 (如: 3): " start_suffix
     if [[ -z "$start_suffix" ]]; then
@@ -533,13 +538,18 @@ configure_multi_user_ip() {
 cleanup_multi_user_ip() {
     echo -e "${YELLOW}清理多用户多IP配置${NC}"
     
+    # 获取服务器公网IP
+    local domain=$(curl -s ipinfo.io/ip || curl -s myip.ipip.net | grep -oE "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" || curl -s https://api.ip.sb/ip)
+    if [ -z "$domain" ]; then
+        read -p "请输入服务器公网IP: " domain
+    fi
+    echo -e "${YELLOW}服务器公网IP: $domain${NC}"
+    
     # 获取IP范围
     echo -e "${YELLOW}请输入要清理的IP配置信息:${NC}"
-    read -p "请输入IP前缀 (如: 131.103.115): " ip_prefix
-    if [[ -z "$ip_prefix" ]]; then
-        ip_prefix="131.103.115"
-        echo -e "${YELLOW}使用默认IP前缀: $ip_prefix${NC}"
-    fi
+    # 自动从服务器公网IP提取前缀
+    ip_prefix=$(echo "$domain" | cut -d'.' -f1-3)
+    echo -e "${YELLOW}自动使用服务器IP前缀: $ip_prefix${NC}"
     
     read -p "请输入起始IP后缀 (如: 3): " start_suffix
     if [[ -z "$start_suffix" ]]; then
@@ -670,12 +680,8 @@ generate_instances_batch() {
             # 多用户多IP模式
             echo -e "${YELLOW}多用户多IP模式配置:${NC}"
             # 自动从服务器公网IP提取前缀
-            auto_prefix=$(echo "$domain" | cut -d'.' -f1-3)
-            read -p "请输入IP前缀 (从公网IP $domain 提取: $auto_prefix): " ip_prefix
-            if [[ -z "$ip_prefix" ]]; then
-                ip_prefix="$auto_prefix"
-                echo -e "${YELLOW}使用服务器IP前缀: $ip_prefix${NC}"
-            fi
+            ip_prefix=$(echo "$domain" | cut -d'.' -f1-3)
+            echo -e "${YELLOW}自动使用服务器IP前缀: $ip_prefix${NC}"
             
             read -p "请输入起始IP后缀 (如: 3): " start_suffix
             if [[ -z "$start_suffix" ]]; then
