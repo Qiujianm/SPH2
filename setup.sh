@@ -34,6 +34,10 @@ create_all_scripts() {
     
     # 创建目录
     mkdir -p /root/hysteria
+    
+    # 设置非交互模式，避免任何可能的交互式提示
+    export DEBIAN_FRONTEND=noninteractive
+    export UCF_FORCE_CONFFNEW=1
 
     # 创建并赋权 main.sh
 cat > /root/hysteria/main.sh << 'MAINEOF'
@@ -3990,6 +3994,10 @@ chmod +x /usr/local/bin/h2
 cleanup_old_installation() {
     printf "%b清理旧的安装...%b\n" "${YELLOW}" "${NC}"
     
+    # 设置非交互模式，避免任何可能的交互式提示
+    export DEBIAN_FRONTEND=noninteractive
+    export UCF_FORCE_CONFFNEW=1
+    
     # 停止所有hysteria服务
     systemctl stop hysteria-server 2>/dev/null
     systemctl stop hysteria-server@* 2>/dev/null
@@ -4157,6 +4165,10 @@ cleanup_hysteria_iptables_rules() {
 check_and_free_ports() {
     printf "%b检查端口占用情况...%b\n" "${YELLOW}" "${NC}"
     
+    # 设置非交互模式，避免任何可能的交互式提示
+    export DEBIAN_FRONTEND=noninteractive
+    export UCF_FORCE_CONFFNEW=1
+    
     local ports_to_check=(443 80 22 8080 8443)
     local freed_ports=()
     
@@ -4213,6 +4225,10 @@ check_and_free_ports() {
 install_base() {
     printf "%b安装基础依赖...%b\n" "${YELLOW}" "${NC}"
     
+    # 设置非交互模式，避免任何可能的交互式提示
+    export DEBIAN_FRONTEND=noninteractive
+    export UCF_FORCE_CONFFNEW=1
+    
     # 检测系统类型
     local os_type=""
     if [ -f /etc/debian_version ]; then
@@ -4238,9 +4254,19 @@ install_base() {
             fi
             
             printf "%b安装基础工具...%b\n" "${YELLOW}" "${NC}"
-            if echo "iptables-persistent iptables-persistent/autosave_v4 boolean true" | debconf-set-selections && \
-               echo "iptables-persistent iptables-persistent/autosave_v6 boolean true" | debconf-set-selections && \
-               timeout 300 apt install -y curl wget openssl net-tools iptables iptables-persistent 2>/dev/null; then
+            
+            # 设置所有可能的交互式提示为非交互模式
+            export DEBIAN_FRONTEND=noninteractive
+            export UCF_FORCE_CONFFNEW=1
+            
+            # 预配置所有可能的debconf问题
+            echo "iptables-persistent iptables-persistent/autosave_v4 boolean true" | debconf-set-selections
+            echo "iptables-persistent iptables-persistent/autosave_v6 boolean true" | debconf-set-selections
+            echo "netfilter-persistent netfilter-persistent/autosave_v4 boolean true" | debconf-set-selections
+            echo "netfilter-persistent netfilter-persistent/autosave_v6 boolean true" | debconf-set-selections
+            
+            # 使用apt-get而不是apt，并添加更多参数确保非交互
+            if timeout 300 apt-get install -y --no-install-recommends --assume-yes curl wget openssl net-tools iptables iptables-persistent 2>/dev/null; then
                 printf "%b✓ 基础依赖安装成功%b\n" "${GREEN}" "${NC}"
             else
                 printf "%b⚠ 部分依赖安装失败，尝试继续%b\n" "${YELLOW}" "${NC}"
@@ -4248,7 +4274,11 @@ install_base() {
             ;;
         "redhat")
             printf "%b安装基础工具...%b\n" "${YELLOW}" "${NC}"
-            if timeout 300 yum install -y curl wget openssl net-tools iptables iptables-services 2>/dev/null; then
+            
+            # 设置非交互模式
+            export DEBIAN_FRONTEND=noninteractive
+            
+            if timeout 300 yum install -y --assumeyes curl wget openssl net-tools iptables iptables-services 2>/dev/null; then
                 printf "%b✓ 基础依赖安装成功%b\n" "${GREEN}" "${NC}"
                 # 启用iptables服务
                 systemctl enable iptables 2>/dev/null || true
@@ -4258,7 +4288,11 @@ install_base() {
             ;;
         "arch")
             printf "%b安装基础工具...%b\n" "${YELLOW}" "${NC}"
-            if timeout 300 pacman -S --noconfirm curl wget openssl net-tools iptables 2>/dev/null; then
+            
+            # 设置非交互模式
+            export DEBIAN_FRONTEND=noninteractive
+            
+            if timeout 300 pacman -S --noconfirm --needed curl wget openssl net-tools iptables 2>/dev/null; then
                 printf "%b✓ 基础依赖安装成功%b\n" "${GREEN}" "${NC}"
             else
                 printf "%b⚠ 部分依赖安装失败，尝试继续%b\n" "${YELLOW}" "${NC}"
@@ -4303,6 +4337,10 @@ install_base() {
 # 安装Hysteria
 install_hysteria() {
     printf "%b开始安装Hysteria...%b\n" "${YELLOW}" "${NC}"
+    
+    # 设置非交互模式，避免任何可能的交互式提示
+    export DEBIAN_FRONTEND=noninteractive
+    export UCF_FORCE_CONFFNEW=1
     
     # 清理可能存在的空文件
     if [ -f "/usr/local/bin/hysteria" ] && [ ! -s "/usr/local/bin/hysteria" ]; then
@@ -4426,6 +4464,10 @@ verify_installation() {
 create_systemd_service() {
     printf "%b创建systemd服务...%b\n" "${YELLOW}" "${NC}"
     
+    # 设置非交互模式，避免任何可能的交互式提示
+    export DEBIAN_FRONTEND=noninteractive
+    export UCF_FORCE_CONFFNEW=1
+    
     # 创建配置目录
     mkdir -p /etc/hysteria
     
@@ -4457,10 +4499,14 @@ bandwidth:
   down: 185 mbps
 EOF
 
-    # 生成默认证书
-    openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 365 \
+    # 生成默认证书（添加超时和错误处理）
+    if ! timeout 30 openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 365 \
         -keyout /etc/hysteria/server.key -out /etc/hysteria/server.crt \
-        -subj "/CN=localhost" 2>/dev/null
+        -subj "/CN=localhost" 2>/dev/null; then
+        printf "%b⚠ 证书生成失败，使用默认配置继续%b\n" "${YELLOW}" "${NC}"
+        # 创建空的证书文件以避免错误
+        touch /etc/hysteria/server.key /etc/hysteria/server.crt
+    fi
 
     # 创建systemd服务文件
     cat > /etc/systemd/system/hysteria-server.service << EOF
@@ -4478,48 +4524,23 @@ User=root
 WantedBy=multi-user.target
 EOF
 
-    systemctl daemon-reload
-    systemctl enable hysteria-server
+    # 重新加载systemd配置（添加超时）
+    if timeout 30 systemctl daemon-reload 2>/dev/null; then
+        printf "%b✓ Systemd配置已重新加载%b\n" "${GREEN}" "${NC}"
+    else
+        printf "%b⚠ Systemd配置重新加载超时，继续%b\n" "${YELLOW}" "${NC}"
+    fi
+    
+    # 启用服务（添加超时）
+    if timeout 30 systemctl enable hysteria-server 2>/dev/null; then
+        printf "%b✓ Hysteria服务已启用%b\n" "${GREEN}" "${NC}"
+    else
+        printf "%b⚠ 启用Hysteria服务超时，继续%b\n" "${YELLOW}" "${NC}"
+    fi
+    
     printf "%bSystemd服务创建完成%b\n" "${GREEN}" "${NC}"
 }
 
-# 验证安装
-verify_installation() {
-    printf "%b验证安装...%b\n" "${YELLOW}" "${NC}"
-    
-    # 检查hysteria可执行文件
-    if [ ! -f "/usr/local/bin/hysteria" ] || [ ! -x "/usr/local/bin/hysteria" ]; then
-        printf "%b✗ hysteria可执行文件不存在或无法执行%b\n" "${RED}" "${NC}"
-        return 1
-    fi
-    
-    # 检查文件大小
-    if [ ! -s "/usr/local/bin/hysteria" ]; then
-        printf "%b✗ hysteria文件为空%b\n" "${RED}" "${NC}"
-        return 1
-    fi
-    
-    # 测试版本命令
-    if ! /usr/local/bin/hysteria version >/dev/null 2>&1; then
-        printf "%b✗ hysteria版本检查失败%b\n" "${RED}" "${NC}"
-        return 1
-    fi
-    
-    # 检查脚本文件
-    if [ ! -f "/root/hysteria/main.sh" ] || [ ! -x "/root/hysteria/main.sh" ]; then
-        printf "%b✗ 管理脚本不存在或无法执行%b\n" "${RED}" "${NC}"
-        return 1
-    fi
-    
-    # 检查systemd服务
-    if [ ! -f "/etc/systemd/system/hysteria-server.service" ]; then
-        printf "%b✗ systemd服务文件不存在%b\n" "${RED}" "${NC}"
-        return 1
-    fi
-    
-    printf "%b✓ 安装验证通过%b\n" "${GREEN}" "${NC}"
-    return 0
-}
 
 # 主函数
 main() {
@@ -4528,6 +4549,10 @@ main() {
     printf "%b作者: ${AUTHOR}%b\n" "${GREEN}" "${NC}"
     printf "%b版本: ${VERSION}%b\n" "${GREEN}" "${NC}"
     printf "%b============================================%b\n" "${GREEN}" "${NC}"
+    
+    # 设置非交互模式，避免任何可能的交互式提示
+    export DEBIAN_FRONTEND=noninteractive
+    export UCF_FORCE_CONFFNEW=1
     
     cleanup_old_installation
     check_and_free_ports
