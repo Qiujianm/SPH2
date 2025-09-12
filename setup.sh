@@ -11,6 +11,13 @@ NC='\033[0m'
 # 检查root权限
 [ "$EUID" -ne 0 ] && echo -e "${RED}请使用root权限运行此脚本${NC}" && exit 1
 
+# 检查并处理可能卡住的 man-db 进程
+if pgrep -f "man-db" >/dev/null 2>&1; then
+    echo -e "${YELLOW}检测到 man-db 进程正在运行，正在处理...${NC}"
+    pkill -f "man-db" 2>/dev/null || true
+    sleep 2
+fi
+
 # 打印状态函数
 print_status() {
     local type=$1
@@ -26,6 +33,32 @@ print_status() {
             printf "%b[错误]%b %s\n" "${RED}" "${NC}" "$message"
             ;;
     esac
+}
+
+# 处理 man-db 卡住问题
+fix_man_db_hang() {
+    print_status "info" "检查并修复 man-db 卡住问题..."
+    
+    # 检查是否有 man-db 进程卡住
+    if pgrep -f "man-db" >/dev/null 2>&1; then
+        print_status "warn" "检测到 man-db 进程卡住，正在处理..."
+        
+        # 终止卡住的 man-db 进程
+        pkill -f "man-db" 2>/dev/null || true
+        sleep 2
+        
+        # 跳过 man-db 触发器
+        echo '#!/bin/sh' > /usr/bin/update-man-db
+        echo 'exit 0' >> /usr/bin/update-man-db
+        chmod +x /usr/bin/update-man-db
+        
+        # 完成 dpkg 配置
+        if timeout 30 dpkg --configure -a 2>/dev/null; then
+            print_status "info" "包配置完成"
+        else
+            print_status "warn" "包配置仍有问题，但已跳过 man-db"
+        fi
+    fi
 }
 
 # 创建并赋权所有模块脚本
@@ -4347,12 +4380,45 @@ install_base() {
             echo "netfilter-persistent netfilter-persistent/autosave_v4 boolean true" | debconf-set-selections
             echo "netfilter-persistent netfilter-persistent/autosave_v6 boolean true" | debconf-set-selections
             
-            # 使用apt-get而不是apt，并添加更多参数确保非交互
-            if timeout 300 apt-get install -y --no-install-recommends --assume-yes curl wget openssl net-tools iptables iptables-persistent 2>/dev/null; then
-                printf "%b✓ 基础依赖安装成功%b\n" "${GREEN}" "${NC}"
+            # 预配置 man-db 相关设置，避免卡住
+            echo "man-db man-db/auto-update boolean false" | debconf-set-selections
+            echo "man-db man-db/install-mandb boolean false" | debconf-set-selections
+            
+            # 分步安装，避免 man-db 问题
+            printf "%b分步安装基础工具...%b\n" "${YELLOW}" "${NC}"
+            
+            # 先安装基础工具（不包含 iptables-persistent）
+            if timeout 180 apt-get install -y --no-install-recommends --assume-yes curl wget openssl net-tools iptables 2>/dev/null; then
+                printf "%b✓ 基础工具安装成功%b\n" "${GREEN}" "${NC}"
+                
+                # 单独安装 iptables-persistent，避免触发器问题
+                printf "%b安装 iptables-persistent...%b\n" "${YELLOW}" "${NC}"
+                if timeout 120 apt-get install -y --no-install-recommends --assume-yes iptables-persistent 2>/dev/null; then
+                    printf "%b✓ iptables-persistent 安装成功%b\n" "${GREEN}" "${NC}"
+                else
+                    printf "%b⚠ iptables-persistent 安装超时，尝试处理未完成的配置%b\n" "${YELLOW}" "${NC}"
+                    
+                    # 处理可能卡住的 dpkg 配置
+                    printf "%b处理未完成的包配置...%b\n" "${YELLOW}" "${NC}"
+                    if timeout 60 dpkg --configure -a 2>/dev/null; then
+                        printf "%b✓ 包配置完成%b\n" "${GREEN}" "${NC}"
+                    else
+                        printf "%b⚠ 包配置超时，跳过 man-db 触发器%b\n" "${YELLOW}" "${NC}"
+                        # 跳过 man-db 触发器
+                        echo '#!/bin/sh' > /usr/bin/update-man-db
+                        echo 'exit 0' >> /usr/bin/update-man-db
+                        chmod +x /usr/bin/update-man-db
+                        
+                        # 再次尝试配置
+                        timeout 30 dpkg --configure -a 2>/dev/null || true
+                    fi
+                fi
             else
-                printf "%b⚠ 部分依赖安装失败，尝试继续%b\n" "${YELLOW}" "${NC}"
+                printf "%b⚠ 基础工具安装失败，尝试继续%b\n" "${YELLOW}" "${NC}"
             fi
+            
+            # 检查并修复可能的 man-db 卡住问题
+            fix_man_db_hang
             ;;
         "redhat")
             printf "%b安装基础工具...%b\n" "${YELLOW}" "${NC}"
