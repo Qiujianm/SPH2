@@ -1034,17 +1034,8 @@ masquerade:
     url: https://www.bing.com
     rewriteHost: true"
                 
-                # 为远端代理模式生成outbounds配置（包含DNS解析器）
+                # 为远端代理模式生成outbounds配置
                 outbounds_config="
-resolver:
-  type: udp
-  tcp:
-    addr: 208.67.222.222:53
-    timeout: 4s
-  udp:
-    addr: 208.67.222.222:53
-    timeout: 4s
-
 outbounds:
   - name: my_proxy
     type: http
@@ -1062,22 +1053,6 @@ acl:
         esac
         
         config_file="$CONFIG_DIR/config_${server_port}.yaml"
-
-        # 如果没有outbounds配置，则为其他IP模式也添加DNS解析器
-        if [ -z "$outbounds_config" ]; then
-            dns_resolver_config="
-resolver:
-  type: udp
-  tcp:
-    addr: 208.67.222.222:53
-    timeout: 4s
-  udp:
-    addr: 208.67.222.222:53
-    timeout: 4s
-"
-        else
-            dns_resolver_config=""
-        fi
 
         cat >"$config_file" <<EOF
 listen: :$server_port
@@ -1100,7 +1075,7 @@ quic:
 bandwidth:
   up: ${up_bw} mbps
   down: ${down_bw} mbps
-$dns_resolver_config$outbounds_config
+$outbounds_config
 EOF
 
         # 收集端口和配置文件信息
@@ -2143,16 +2118,6 @@ quic:
 bandwidth:
   up: ${up_bw} mbps
   down: ${down_bw} mbps
-
-# DNS解析器配置 - 使用美国DNS服务器
-resolver:
-  type: udp
-  tcp:
-    addr: 208.67.222.222:53
-    timeout: 4s
-  udp:
-    addr: 208.67.222.222:53
-    timeout: 4s
 
 # 绑定出口IP
 bind: $bind_ip
@@ -4680,16 +4645,6 @@ quic:
 bandwidth:
   up: 185 mbps
   down: 185 mbps
-
-# DNS解析器配置 - 使用美国DNS服务器（OpenDNS）
-resolver:
-  type: udp
-  tcp:
-    addr: 208.67.222.222:53
-    timeout: 4s
-  udp:
-    addr: 208.67.222.222:53
-    timeout: 4s
 EOF
 
     # 生成默认证书（添加超时和错误处理）
