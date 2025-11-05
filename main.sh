@@ -19,11 +19,12 @@ while true; do
     echo "4. 系统优化"
     echo "5. 检查更新"
     echo "6. 运行状态"
-    echo "7. 完全卸载"
+    echo "7. 流量监控"
+    echo "8. 完全卸载"
     echo "0. 退出脚本"
     printf "%b====================================%b\n" "${GREEN}" "${NC}"
     
-    read -t 60 -p "请选择 [0-7]: " choice || {
+    read -t 60 -p "请选择 [0-8]: " choice || {
         printf "\n%b操作超时，退出脚本%b\n" "${YELLOW}" "${NC}"
         exit 1
     }
@@ -41,7 +42,8 @@ while true; do
             systemctl status hysteriaclient@* 2>/dev/null || echo "未找到客户端实例"
             read -t 30 -n 1 -s -r -p "按任意键继续..."
             ;;
-        7) bash ./config.sh uninstall ;;
+        7) bash ./monitor.sh ;;
+        8) bash ./config.sh uninstall ;;
         0) exit 0 ;;
         *)
             printf "%b无效选择%b\n" "${RED}" "${NC}"
